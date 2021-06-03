@@ -171,10 +171,8 @@ sub run {
         click_lastmatch;
         assert_screen 'xterm';
     }
-    send_key "alt-f4";
-    wait_still_screen;
-    send_key "ret";
-    wait_still_screen;
+    send_key "esc";
+    assert_and_click "xterm-close-window";
     assert_screen "generic-desktop";
 
     #remove xterm from startup application
