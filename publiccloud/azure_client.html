@@ -14,16 +14,24 @@
 <ul id="index"><li><a href="../index.html"><i>&lt;= Back to file list</i></a></li>
   <li>
     <ul>
-      <li><a href="#decode_azure_json">decode_azure_json</a></li>
+      <li><a href="#configure_docker">configure_docker</a></li>
+      <li><a href="#get_container_registry_prefix">get_container_registry_prefix</a></li>
+      <li><a href="#get_container_image_full_name">get_container_image_full_name</a></li>
     </ul>
   </li>
 </ul><h1>lib/publiccloud/azure_client.pm</h1>
 
-<h2 id="decode_azure_json">decode_azure_json</h2>
+<h2 id="configure_docker">configure_docker</h2>
 
-<pre><code>    my $json_obj = decode_azure_json($str);</code></pre>
+<p>Configure the docker to access the cloud provider registry</p>
 
-<p>Helper function to decode json string, retrieved from <code>az</code>, into a json object. Due to https://github.com/Azure/azure-cli/issues/9903 we need to strip all color codes from that string first.</p>
+<h2 id="get_container_registry_prefix">get_container_registry_prefix</h2>
+
+<p>Get the full registry prefix URL (based on the account and region) to push container images on ACR.</p>
+
+<h2 id="get_container_image_full_name">get_container_image_full_name</h2>
+
+<p>Returns the full name of the container image in ACR registry <code>tag</code> Tag of the container</p>
 
 
 </body>
