@@ -18,6 +18,7 @@ use warnings;
 use testapi;
 
 sub run {
+    ensure_installed('gedit');
     x11_start_program('nautilus');
     wait_screen_change { send_key 'ctrl-f' };
     type_string 'newfile';
