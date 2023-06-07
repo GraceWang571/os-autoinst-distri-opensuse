@@ -26,7 +26,9 @@ sub run {
 
     assert_and_click "nautilus-newfile-matched";
     send_key "ctrl-x";
-    assert_and_dclick "nautilus-Downloads-matched";
+    assert_and_click "nautilus-Downloads-matched";
+    assert_and_dclick "nautilus-Downloads-selected";
+    assert_screen("nautilus-Downloads-dir");
     # paste to ~/Downloads
     send_key "ctrl-v";
     # assure file moved, no matter file is highlighted or not
