@@ -25,6 +25,7 @@ sub run {
 
     if (check_var('RUN_TEST_ONLY', 0)) {
         use_ssh_serial_console;
+        set_grub_timeout;
 
         # Synchronize the server & agent node before setup
         barrier_wait('kubevirt_test_setup');
@@ -63,7 +64,7 @@ sub rke2_agent_setup {
     transactional::process_reboot(trigger => 1) if (is_transactional);
     record_info('Installed certificates packages', script_output('rpm -qa | grep certificates'));
     # Set kernel hostname to avoid x509 server connection issue
-    assert_script_run('hostnamectl set-hostname $(uname -n)');
+    assert_script_run('hostnamectl set-hostname $(hostname -f)');
 
     # Install kubevirt packages complete
     barrier_wait('kubevirt_packages_install_complete');

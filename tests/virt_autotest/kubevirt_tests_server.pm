@@ -8,7 +8,6 @@
 # Maintainer: Nan Zhang <nan.zhang@suse.com> qe-virt@suse.de
 
 use base multi_machine_job_base;
-use base prepare_transactional_server;
 use strict;
 use warnings;
 use testapi;
@@ -64,7 +63,8 @@ my @core_tests = (
     'console_test',
     'vnc_test',
     'expose_test',
-    'replicaset_test'
+    'replicaset_test',
+    'migration_test'
 );
 
 sub run {
@@ -72,6 +72,7 @@ sub run {
 
     if (check_var('RUN_TEST_ONLY', 0)) {
         use_ssh_serial_console;
+        set_grub_timeout;
 
         # Synchronize the server & agent node before setup
         barrier_wait('kubevirt_test_setup');
@@ -113,7 +114,7 @@ sub rke2_server_setup {
     transactional::process_reboot(trigger => 1) if (is_transactional);
     record_info('Installed certificates packages', script_output('rpm -qa | grep certificates'));
     # Set kernel hostname to avoid x509 server connection issue
-    assert_script_run('hostnamectl set-hostname $(uname -n)');
+    assert_script_run('hostnamectl set-hostname $(hostname -f)');
 
     $self->install_kubevirt_packages();
 
@@ -237,8 +238,21 @@ sub install_kubevirt_packages {
     zypper_call('in jq open-iscsi') if (script_run('rpmquery jq open-iscsi') && ($kubevirt_ver ge "0.50.0"));
 
     # Install required packages perl-CPAN-Changes and ant-junit
+    my $repo_name = '';
+    my $inst_pkgs = '';
     if (is_transactional) {
-        $self->install_additional_pkgs();
+        if (get_var("INSTALL_OTHER_REPOS")) {
+            foreach (split(/,/, get_var("INSTALL_OTHER_REPOS"))) {
+                $repo_name = (split(/\//, $_))[-1] . "-" . bmwqemu::random_string(8);
+                zypper_call("--gpg-auto-import-keys ar --enable --refresh $_ $repo_name");
+                save_screenshot;
+            }
+            zypper_call("--gpg-auto-import-keys refresh");
+            save_screenshot;
+            $inst_pkgs = $inst_pkgs . " $_" foreach (split(/,/, get_required_var("INSTALL_OTHER_PACKAGES")));
+            zypper_call('in -f' . $inst_pkgs);
+            save_screenshot;
+        }
     } else {
         zypper_call('in git ant-junit') if (script_run('rpmquery git ant-junit'));
     }
@@ -560,7 +574,7 @@ EOF
 
             if ($section eq 'migration_test') {
                 assert_script_run("kubectl delete net-attach-def migration-cni -n kubevirt") if (!script_run("kubectl get net-attach-def -A | grep migration-cni"));
-                $server_ip = get_required_var('SERVER_IP');
+                $server_ip = script_output("nslookup " . get_required_var('SUT_IP') . "|sed -n '5,1p'|awk -F' ' '{print \$2}'");
                 $nic_name = script_output("ip addr | grep $server_ip | awk -F' ' '{print \$NF}'");
                 $extra_opt = "-migration-network-nic=$nic_name";
             }
@@ -626,6 +640,15 @@ sub generate_test_report {
     my $build_xml = "/tmp/buildTestReports.xml";
     my $html_dir = "$result_dir/html";
 
+    # Remove duplicate skipped testcases from xml result files
+    my $deduplication_script = "remove_dup_skipped_tests.py";
+    assert_script_run("curl " . data_url("virt_autotest/kubevirt_tests/$deduplication_script") . " -o $deduplication_script");
+    assert_script_run("python3 $deduplication_script $result_dir");
+
+    my $xsl_file = "junit-noframes.xsl";
+    assert_script_run("curl " . data_url("virt_autotest/kubevirt_tests/$xsl_file") . " -o $xsl_file");
+    assert_script_run("mv $xsl_file /tmp");
+
     record_info('Generate test report', '');
     assert_script_run(qq(cat > $build_xml <<__END
 <project name="genTestReport" default="gen" basedir="$result_dir">
@@ -640,7 +663,9 @@ sub generate_test_report {
             <fileset dir="$result_dir">
                 <include name="*_test.xml" />
             </fileset>
-            <report format="frames" todir="$html_dir" />
+            <report format="noframes" todir="$html_dir" styledir="/tmp">
+                <param name="TITLE" expression="Kubevirt Test Results"/>
+            </report>
         </junitreport>
     </target>
 </project>
@@ -684,7 +709,7 @@ sub upload_test_results {
 
         my $openqa_host = get_var('OPENQA_URL');
         my $job_id = get_current_job_id();
-        record_info('HTML report URL', "http://$openqa_host/tests/$job_id/file/index.html");
+        record_info('HTML report URL', "http://$openqa_host/tests/$job_id/file/junit-noframes.html");
     }
 }
 

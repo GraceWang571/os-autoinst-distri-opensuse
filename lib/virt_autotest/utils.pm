@@ -26,11 +26,75 @@ use Utils::Architectures;
 use IO::Socket::INET;
 use Carp;
 
-our @EXPORT = qw(is_vmware_virtualization is_hyperv_virtualization is_fv_guest is_pv_guest is_sev_es_guest guest_is_sle is_guest_ballooned is_xen_host is_kvm_host
-  is_monolithic_libvirtd turn_on_libvirt_debugging_log restart_libvirtd check_libvirtd restart_modular_libvirt_daemons check_modular_libvirt_daemons
-  reset_log_cursor check_failures_in_journal check_host_health check_guest_health print_cmd_output_to_file collect_virt_system_logs setup_rsyslog_host download_script download_script_and_execute upload_virt_logs enable_nm_debug upload_nm_debug_log
-  ssh_setup setup_common_ssh_config add_alias_in_ssh_config install_default_packages parse_subnet_address_ipv4 backup_file manage_system_service check_port_state is_registered_sles is_registered_system do_system_registration check_system_registration subscribe_extensions_and_modules check_activate_network_interface wait_for_host_reboot
-  create_guest import_guest ssh_copy_id add_guest_to_hosts ensure_default_net_is_active ensure_guest_started remove_additional_disks remove_additional_nic start_guests is_guest_online ensure_online wait_guest_online restore_downloaded_guests save_original_guest_xmls restore_original_guests save_guests_xml_for_change restore_xml_changed_guests shutdown_guests wait_guests_shutdown remove_vm recreate_guests download_vm_import_disks get_guest_regcode
+our @EXPORT = qw(
+  is_vmware_virtualization
+  is_hyperv_virtualization
+  is_fv_guest
+  is_pv_guest
+  is_sev_es_guest
+  guest_is_sle
+  is_guest_ballooned
+  is_xen_host
+  is_kvm_host
+  is_sles_mu_virt_test
+  is_monolithic_libvirtd
+  turn_on_libvirt_debugging_log
+  restart_libvirtd
+  check_libvirtd
+  restart_modular_libvirt_daemons
+  check_modular_libvirt_daemons
+  reset_log_cursor
+  check_failures_in_journal
+  check_host_health
+  check_guest_health
+  print_cmd_output_to_file
+  collect_virt_system_logs
+  setup_rsyslog_host
+  download_script
+  download_script_and_execute
+  upload_virt_logs
+  enable_nm_debug
+  upload_nm_debug_log
+  ssh_setup
+  setup_common_ssh_config
+  add_alias_in_ssh_config
+  install_default_packages
+  parse_subnet_address_ipv4
+  backup_file
+  manage_system_service
+  check_port_state
+  is_registered_sles
+  is_registered_system
+  do_system_registration
+  check_system_registration
+  subscribe_extensions_and_modules
+  check_activate_network_interface
+  wait_for_host_reboot
+  create_guest
+  import_guest
+  ssh_copy_id
+  add_guest_to_hosts
+  ensure_default_net_is_active
+  ensure_guest_started
+  remove_additional_disks
+  remove_additional_nic
+  start_guests
+  is_guest_online
+  ensure_online
+  wait_guest_online
+  restore_downloaded_guests
+  save_original_guest_xmls
+  restore_original_guests
+  save_guests_xml_for_change
+  restore_xml_changed_guests
+  shutdown_guests
+  wait_guests_shutdown
+  remove_vm
+  recreate_guests
+  download_vm_import_disks
+  get_guest_regcode
+  execute_over_ssh
+  reboot_virtual_machine
 );
 
 my %log_cursors;
@@ -117,6 +181,11 @@ sub is_vmware_virtualization {
 #return 1 if it is a Hyper-V test judging by REGRESSION variable
 sub is_hyperv_virtualization {
     return get_var("REGRESSION", '') =~ /hyperv/;
+}
+
+# Return 1 if it is SLES MU virt test, otherwise return 0
+sub is_sles_mu_virt_test {
+    return is_sle && get_var('REGRESSION') =~ /xen|kvm|qemu|hyperv|vmware/ && !get_var("VIRT_AUTOTEST");
 }
 
 #return 1 if it is a fv guest judging by name
@@ -914,7 +983,7 @@ sub check_port_state {
 
 #Detect whether SUT host is installed with scc registration
 sub is_registered_sles {
-    if (!get_var('SCC_REGISTER') || check_var('SCC_REGISTER', 'none') || check_var('SCC_REGISTER', '')) {
+    if ((!get_var('SCC_REGISTER') or check_var('SCC_REGISTER', 'none')) and (!get_var('REGISTER') or check_var('REGISTER', 'none'))) {
         return 0;
     }
     else {
@@ -1305,6 +1374,65 @@ sub wait_for_host_reboot {
     record_info("Host rebooted");
     reset_consoles;
     select_console('root-ssh');
+}
+
+=head2 execute_over_ssh
+
+  execute_over_ssh(username => $user, address => $address,
+      command => $command, timeout => $timeout, assert => $assert)
+
+Run command over passwordless ssh session. Arguments include username default 
+value of which is 'root', address which can take the form of FQDN or IP and is
+mandatory, command to be executed, timeout value to wait before next step and
+assert which determines assertive call or not.
+
+=cut
+
+sub execute_over_ssh {
+    my %args = @_;
+    $args{username} //= 'root';
+    $args{address} //= '';
+    $args{command} //= '';
+    $args{timeout} //= 90;
+    $args{assert} //= 1;
+    croak('Argument address and command must be given to run over ssh') if (!$args{address} or !$args{command});
+
+    wait_guest_online($args{address});
+    my $command = "ssh $args{username}\@$args{address} \"$args{command}\"";
+    script_retry($command, timeout => $args{timeout}, delay => 15, retry => 3, die => $args{assert});
+}
+
+=head2 reboot_virtual_machine
+
+  reboot_virtual_machine(username => $user, address => $address, domain => $domain)
+
+Reboot virtual machine by issuing 'reboot' over ssh and then 'virsh command' if
+'reboot' does not succeed and virtual machine domain name is given as arguement
+domain which is default to argument address if it is also a domain name. Address
+can also takes the form of FQDN and IP as long as it is reachable over ssh. And
+another argument username has the default value of 'root' if no passed in value. 
+
+=cut
+
+sub reboot_virtual_machine {
+    my %args = @_;
+    $args{username} //= 'root';
+    $args{address} //= '';
+    $args{domain} //= $args{address};
+    croak('Argument address must be given to reboot virtual machine') if (!$args{address});
+
+    my $test_ssh_open = "nmap $args{address} -PN -p ssh | grep -i open";
+    my $test_ssh_not_open = "nmap $args{address} -PN -p ssh | grep -i -v open";
+    if (script_retry($test_ssh_open, delay => 1, retry => 30, die => 0) == 0) {
+        script_run("ssh $args{username}\@$args{address} \"reboot\"");
+        script_run("virsh destroy $args{domain}") if (script_retry($test_ssh_not_open, delay => 1, retry => 60, die => 0) != 0);
+    }
+    croak("Virtual machine $args{domain} $args{address} failed to stop") if (script_retry($test_ssh_not_open, delay => 1, retry => 30, die => 0) != 0);
+    if (script_retry($test_ssh_open, delay => 1, retry => 30, die => 0) != 0) {
+        script_run("virsh destroy $args{domain}");
+        script_run("virsh start $args{domain}");
+        script_retry($test_ssh_open, delay => 1, retry => 30, die => 1);
+    }
 }
 
 1;

@@ -56,7 +56,7 @@ use warnings;
 
 use utils;
 use power_action_utils qw(prepare_system_shutdown power_action);
-use List::Util qw(first pairmap uniq notall);
+use List::Util qw(first pairmap uniq);
 use qam;
 use maintenance_smelt qw(get_packagebins_in_modules get_incident_packages);
 use testapi;
@@ -80,6 +80,7 @@ my @conflicting_packages = (
     'xen-tools-domU',
     'nfsidmap-devel',
     'libglfw3',
+    'openvpn-dco',
     'cyrus-sasl-bdb-ntlm', 'cyrus-sasl-bdb-otp', 'cyrus-sasl-saslauthd-bdb', 'cyrus-sasl-otp',
     'cyrus-sasl-ntlm', 'cyrus-sasl-bdb-devel', 'cyrus-sasl-sqlauxprop',
     'kernel-firmware-nvidia-gspx-G06-cuda', 'nvidia-open-driver-G06-signed-cuda-kmp-default',
@@ -207,8 +208,9 @@ sub run {
     my @modules = split(/,/, $repos);
     foreach (@modules) {
         # substitue SLES_SAP for LTSS repo at this point is SAP ESPOS
-        $_ =~ s/SAP_(\d+(-SP\d)?)/$1-LTSS/ if is_sle('15+');
-        $_ =~ s/SAP_(\d+(-SP\d)?)/SERVER_$1-LTSS/ if is_sle('=12-sp5') && !get_var('BUILD') =~ /saptune/;
+        # workaround only availabe for 15-SP2
+        $_ =~ s/SAP_(\d+(-SP\d)?)/$1-LTSS/ if is_sle('=15-SP2');
+
         next if s{http.*SUSE_Updates_(.*)/?}{$1};
         die 'Modules regex failed. Modules could not be extracted from repos variable.';
     }
@@ -361,6 +363,7 @@ sub run {
             record_info 'Preinstall', 'Install affected packages before update repo is enabled';
             if ($solver_focus) {
                 zypper_call("in -l $solver_focus" . join(' ', keys %installable), exitcode => [0, 102, 103], log => "prepare_$patch.log", timeout => 1500);
+                die "Package scriptlet failed, check log prepare_${patch}." if (script_run("grep 'scriptlet failed, exit status' /tmp/prepare_${patch}.log") == 0);
             }
             else {
                 my $packages = join(' ', keys %installable);

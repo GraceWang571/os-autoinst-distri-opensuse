@@ -16,7 +16,7 @@ use base 'consoletest';
 use testapi;
 use utils;
 use zypper;
-use version_utils 'is_sle';
+use version_utils qw(is_sle is_agama);
 use serial_terminal 'prepare_serial_console';
 use bootloader_setup qw(change_grub_config grub_mkconfig);
 use registration;
@@ -27,6 +27,8 @@ use strict;
 use Utils::Architectures 'is_ppc64le';
 use warnings;
 use virt_autotest::hyperv_utils 'hyperv_cmd';
+use transactional qw(process_reboot);
+use suseconnect_register qw(command_register);
 
 sub run {
     my ($self) = @_;
@@ -60,7 +62,8 @@ sub run {
         if (is_sle('15+') && check_var('SLE_PRODUCT', 'sles')) {
             add_suseconnect_product(get_addon_fullname('base'), undef, undef, undef, 300, 1);
             add_suseconnect_product(get_addon_fullname('serverapp'), undef, undef, undef, 300, 1);
-            add_suseconnect_product(get_addon_fullname('desktop'), undef, undef, undef, 300, 1) if is_sle('=12-sp5', get_var('ORIGIN_SYSTEM_VERSION')) && is_ppc64le;
+            add_suseconnect_product(get_addon_fullname('desktop'), undef, undef, undef, 300, 1)
+              if is_sle('=12-sp5', get_var('ORIGIN_SYSTEM_VERSION')) && is_ppc64le;
         }
         if (is_sle('15+') && check_var('SLE_PRODUCT', 'sled')) {
             add_suseconnect_product(get_addon_fullname('base'), undef, undef, undef, 300, 1);
@@ -81,11 +84,13 @@ sub run {
         }
     }
 
-    # bsc#997263 - VMware screen resolution defaults to 800x600
+    # bsc#997263 - VMware screen resolution defaults to 800x600 and longer GRUB_TIMEOUT for better needle detection
     if (check_var('VIRSH_VMM_FAMILY', 'vmware')) {
-        change_grub_config('=.*', '=1024x768x32', 'GFXMODE=');
-        change_grub_config('=.*', '=1024x768x32', 'GFXPAYLOAD_LINUX=');
+        #change_grub_config('=.*', '=1024x768x32', 'GFXMODE=');
+        #change_grub_config('=.*', '=1024x768x32', 'GFXPAYLOAD_LINUX=');
+        change_grub_config('=.*', '=30', 'GRUB_TIMEOUT=');
         grub_mkconfig;
+        process_reboot(trigger => 1);
     }
 
     # Save output info to logfile
@@ -118,6 +123,30 @@ sub run {
 
     # stop and disable PackageKit
     quit_packagekit;
+    ########
+    # Workaround to install sle16 in beta1
+    # Don't register the system during the installation and use daily build as install url
+    # Register the system once installation done
+    if (is_agama && is_sle) {
+        zypper_call('in suseconnect-ng');
+        record_info "agama pscc register";
+        my $regcode = (get_var('AGAMA_PRODUCT_ID') =~ /SAP/) ? get_var('SCC_REGCODE_SLES4SAP') : get_var('SCC_REGCODE');
+        my $regurl = get_var('SCC_URL');
+        assert_script_run("suseconnect -r $regcode --url $regurl");
+
+        # Register HA extension and output some debug info for reference
+        if (get_var('SCC_ADDONS', '') eq 'ha') {
+            record_info('Register HA extension');
+            command_register(get_required_var('VERSION'), 'ha', get_required_var('SCC_REGCODE_HA'));
+            # Just for debug purpose
+            zypper_call('up', timeout => 600);
+            record_info('REPOS', script_output('zypper lr -u'));
+            record_info('PKGs', script_output('zypper se ha | grep -i high'));
+            record_info('PATTERNS', script_output('zypper patterns'));
+        }
+    }
+    ########
+
 }
 
 sub test_flags {

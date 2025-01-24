@@ -43,7 +43,7 @@ use lockapi 'mutex_wait';
 use bootloader_setup;
 use registration;
 use utils;
-use version_utils qw(is_jeos is_microos is_opensuse is_sle is_selfinstall is_sle_micro);
+use version_utils qw(is_jeos is_microos is_opensuse is_sle is_selfinstall is_sle_micro is_bootloader_sdboot);
 use Utils::Backends qw(is_ipmi);
 
 # hint: press shift-f10 trice for highest debug level
@@ -100,18 +100,30 @@ sub run {
     # By pressing a random key, we stop the grub timeout
     send_key 'backspace' if (is_jeos && is_aarch64);
 
+    if (get_var('FLAVOR') =~ /VMware-Updates/) {
+        # VMware guests have a short GRUB timeout, which can cause issues with needle matching.
+        # After the VMware guest boots to the OS, we press the left arrow key to stop the GRUB timeout.
+        assert_screen('bootloader-vmware');
+        record_info('Flavor is VMWare-Updates', 'Flavor is VMWare-Updates');
+        wait_screen_change(sub { sleep(0.1); }, 90, similarity_level => 20);
+        send_key 'left';
+    }
+
     if (get_var('VERSION') =~ /agama/) {
         # For agama test, it is too short time to match the grub2(10s), so we create
         # a new needle to avoid too much needles loaded.
         assert_screen("bootloader-grub2-agama", $bootloader_timeout);
     }
     else {
-        assert_screen([qw(bootloader-shim-import-prompt bootloader-grub2)], $bootloader_timeout);
+        assert_screen([qw(bootloader-shim-import-prompt bootloader-grub2 bootloader-sdboot)], $bootloader_timeout);
     }
     if (match_has_tag("bootloader-shim-import-prompt")) {
         send_key "down";
         send_key "ret";
-        assert_screen "bootloader-grub2", $bootloader_timeout;
+        assert_screen([qw(bootloader-grub2 bootloader-sdboot)], $bootloader_timeout);
+    }
+    if (match_has_tag("bootloader-sdboot")) {
+        return if is_bootloader_sdboot;
     }
     if (get_var('DISABLE_SECUREBOOT') && (get_var('BACKEND') eq 'qemu')) {
         $self->tianocore_disable_secureboot;
@@ -161,6 +173,7 @@ sub run {
     }
 
     bootmenu_default_params;
+    save_screenshot();
     unless (is_selfinstall) {
         bootmenu_remote_target;
         specific_bootmenu_params unless is_microos || is_jeos;

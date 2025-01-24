@@ -14,7 +14,7 @@ use Exporter qw(import);
 use Carp qw(croak);
 use sles4sap::sap_deployment_automation_framework::naming_conventions
   qw($deployer_private_key_path $sut_private_key_path);
-use sles4sap::console_redirection;
+use publiccloud::azure;
 
 =head1 SYNOPSIS
 
@@ -61,6 +61,8 @@ our @EXPORT = qw(
   read_inventory_file
   prepare_ssh_config
   verify_ssh_proxy_connection
+  create_redirection_data
+  sdaf_create_instances
 );
 
 =head2 read_inventory_file
@@ -230,4 +232,112 @@ sub verify_ssh_proxy_connection {
             record_info('SSH check', "SSH proxy connection to $hostname: OK");
         }
     }
+}
+
+=head2 create_redirection_data
+
+    create_redirection_data(inventory_data=>HASHREF);
+
+Reads parsed and referenced SDAF inventory data, creates data structure required for redirection based tests.
+Returns HASHREF. For more information about returned format check `/tests/sles4sap/redirection_tests/README.md`.
+
+=over
+
+=item * B<inventory_data> SDAF inventory content in referenced perl data structure.
+
+=item * B<sap_sid> SAP system ID. Default 'SAP_SID' OpenQA parameter.
+
+=back
+=cut
+
+sub create_redirection_data {
+    my (%args) = @_;
+    my %infrastructure;
+    $args{sap_sid} //= get_required_var('SAP_SID');
+    # Map instance type name in SDAF inventory file to name expected in redirection data structure
+    my %instance_type_keys = (
+        "$args{sap_sid}_DB" => 'db_hana',
+        "$args{sap_sid}_PAS" => 'nw_pas',
+        "$args{sap_sid}_APP" => 'nw_aas',
+        "$args{sap_sid}_SCS" => 'nw_ascs',
+        "$args{sap_sid}_ERS" => 'nw_ers',
+        "$args{sap_sid}_ISCSI" => 'nw_iscsi',
+        "$args{sap_sid}_OBSERVER_DB" => 'nw_observer_db',
+        "$args{sap_sid}_WEB" => 'nw_web'
+    );
+
+    for my $instance_type (keys(%{$args{inventory_data}})) {
+        my $hosts = $args{inventory_data}->{$instance_type}{hosts};
+        if ($instance_type_keys{$instance_type}) {
+            $infrastructure{$instance_type_keys{$instance_type}} = {translate_hosts_data(%$hosts)};
+        }
+    }
+    return \%infrastructure;
+}
+
+=head2 translate_hosts_data
+
+    translate_hosts_data(%hosts_data);
+
+Reads 'hosts' SDAF inventory section and returns structure translated to hash of hosts
+required for console redirection tests.
+
+=over
+
+=item * B<hosts_data> SDAF inventory content in referenced perl data structure.
+
+=back
+=cut
+
+sub translate_hosts_data {
+    my (%hosts_data) = @_;
+    return unless %hosts_data;
+    my %result = map { $_ => {
+            ip_address => $hosts_data{$_}{ansible_host},
+            ssh_user => $hosts_data{$_}{ansible_user}
+    } } keys(%hosts_data);
+    return %result;
+}
+
+
+=head2 sdaf_create_instances
+
+    sdaf_create_instances(inventory_content=>HASHREF);
+
+Creates and returns  B<$instances> class which is a main component of F<lib/sles4sap_publiccloud.pm> and
+general public cloud libraries F</lib/publiccloud/*>.
+Check SDAF inventory file example in B<SYNOPSIS>
+
+=over
+
+=item * B<inventory_content> Referenced content of the SDAF inventory yaml file
+
+=item * B<sut_ssh_key_path> Path to private key file allowing SSH connection to SUT
+
+=back
+=cut
+
+sub sdaf_create_instances {
+    my (%args) = @_;
+    my @instances;
+
+    for my $instance_type (keys(%{$args{inventory_content}})) {
+        my $hosts = $args{inventory_content}->{$instance_type}{hosts};
+        for my $physical_host (keys %$hosts) {
+            my $instance = publiccloud::instance->new(
+                public_ip => $hosts->{$physical_host}->{ansible_host},
+                instance_id => $physical_host,
+                username => $hosts->{$physical_host}->{ansible_user},
+                ssh_key => $args{sut_ssh_key_path},
+                # Provider does not seem to be needed for SDAF as SDAF does AZ authentication differently
+                # Calling it causes a lot of troubles like creating ssh keys and .ssh/config which breaks SSH connections
+                provider => 'dummy',
+                region => get_required_var('PUBLIC_CLOUD_REGION')
+            );
+            push(@instances, $instance);
+        }
+    }
+
+    publiccloud::instances::set_instances(@instances);
+    return \@instances;
 }

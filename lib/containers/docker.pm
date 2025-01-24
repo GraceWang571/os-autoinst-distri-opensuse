@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright 2020-2021 SUSE LLC
+# Copyright 2020-2025 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Summary: engine subclass for docker specific implementations
@@ -9,15 +9,13 @@
 package containers::docker;
 use Mojo::Base 'containers::engine';
 use testapi;
-use containers::utils qw(registry_url get_docker_version);
+use containers::utils qw(registry_url);
 use containers::common qw(install_docker_when_needed);
 use utils qw(systemctl file_content_replace);
-use version_utils qw(get_os_release);
 has runtime => 'docker';
 
 sub init {
-    my ($running_version, $sp, $host_distri) = get_os_release;
-    install_docker_when_needed($host_distri);
+    install_docker_when_needed();
     configure_insecure_registries();
 }
 
@@ -34,8 +32,7 @@ sub configure_insecure_registries {
 }
 
 sub get_storage_driver {
-    my $json = shift->info(json => 1);
-    my $storage = $json->{Driver};
+    my $storage = script_output("docker info -f '{{.Driver}}'");
     record_info 'Storage', "Detected storage driver=$storage";
 
     return $storage;

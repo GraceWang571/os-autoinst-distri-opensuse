@@ -199,7 +199,7 @@ sub terraform_apply {
 sub img_proof {
     my ($self, %args) = @_;
 
-    $args{instance_type} //= 't2.large';
+    $args{instance_type} //= 't3a.large';
     $args{user} //= 'ec2-user';
     $args{provider} //= 'ec2';
     $args{ssh_private_key_file} //= SSH_KEY_PEM;
@@ -210,13 +210,16 @@ sub img_proof {
 
 sub cleanup {
     my ($self, $args) = @_;
-    script_run('cd ~/terraform');
-    my $instance_id = script_output('terraform output -json | jq -r ".vm_name.value[0]"', proceed_on_failure => 1);
-    script_run('cd');
 
     select_host_console(force => 1);
+
+    script_run('cd ' . get_var('PUBLIC_CLOUD_TERRAFORM_DIR', '~/terraform'));
+    #my $instance_id = script_output('terraform output -json | jq -r ".vm_name.value[0]"', proceed_on_failure => 1);
+    my $instance_id = $self->get_terraform_output('.vm_name.value[]');
+    script_run('cd');
+
     if (!check_var('PUBLIC_CLOUD_SLES4SAP', 1) && defined($instance_id)) {
-        script_run("aws ec2 get-console-output --instance-id $instance_id | jq -r '.Output' > console.txt");
+        script_run("aws ec2 get-console-output --latest --color=on --no-paginate --output text --instance-id $instance_id &> console.txt");
         upload_logs("console.txt", failok => 1);
 
         script_run("aws ec2 get-console-screenshot --instance-id $instance_id | jq -r '.ImageData' | base64 --decode > console.jpg");

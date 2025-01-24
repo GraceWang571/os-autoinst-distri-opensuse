@@ -13,7 +13,7 @@ use warnings;
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils;
-use version_utils qw(is_sle_micro);
+use version_utils qw(has_selinux);
 use Utils::Backends 'is_pvm';
 
 sub run {
@@ -23,14 +23,10 @@ sub run {
     select_serial_terminal;
 
     # list and verify some (not all as it changes often) boolean(s)
-    validate_script_output(
-        "semanage boolean -l",
-        sub {
-            m/
-            authlogin_.*(off.*,.*off).*
-            daemons_.*(off.*,.*off).*
-            domain_.*(off.*,.*off).*/sx
-        });
+    my $booleans = script_output("semanage boolean -l");
+    for my $prefix (qw(authlogin_ daemons_ domain_)) {
+        die "Missing boolean ${prefix}*" unless $booleans =~ m/^${prefix}.*\(off.*,.*off\)/m;
+    }
 
     # test option "-m": to set boolean value "off/on"
     assert_script_run("semanage boolean -m --off $test_boolean");
@@ -48,7 +44,7 @@ sub run {
     validate_script_output("semanage boolean -l | grep $test_boolean", sub { m/${test_boolean}.*(on.*,.*on).*Allow.*to.*/ });
 
     # test option "-C": to list boolean local customizations
-    if (is_sle_micro('>=6.0')) {
+    if (has_selinux) {
         validate_script_output(
             "semanage boolean -l -C",
             sub {

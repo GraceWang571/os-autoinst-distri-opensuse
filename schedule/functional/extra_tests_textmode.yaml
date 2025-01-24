@@ -103,6 +103,13 @@ conditional_schedule:
                 - console/year_2038_detection
                 - console/libjpeg_turbo
                 - console/valkey
+                - '{{velociraptor_tests}}'
+    velociraptor_tests:
+        ARCH:
+            x86_64:
+                - console/velociraptor_client_event_collect
+            aarch64:
+                - console/velociraptor_client_event_collect
 schedule:
     - installation/bootloader_start
     - boot/boot_to_desktop
@@ -117,6 +124,7 @@ schedule:
     - console/zypper_lr_validate
     - console/zypper_ref
     - console/zypper_info
+    - console/snapper_zypp
     - '{{validate_packages_and_patterns}}'
     - console/zypper_extend
     - console/check_os_release

@@ -35,7 +35,9 @@ our @EXPORT = qw(
   detect_profile_directory
   expand_template
   expand_version
+  expand_agama_variables
   adjust_network_conf
+  expand_agama_profile
   expand_variables
   adjust_user_password
   upload_profile
@@ -666,6 +668,26 @@ sub expand_version {
     return $profile;
 }
 
+=head2 expand_agama_variables
+
+ expand_agama_variables($profile);
+
+ Expand variables from job settings which do not require further processing
+
+ $profile is the agama profile.
+
+=cut
+
+sub expand_agama_variables {
+    my ($profile) = @_;
+    my @vars = qw(SCC_REGCODE SCC_REGCODE_SLES4SAP AGAMA_PRODUCT_ID);
+    for my $var (@vars) {
+        next unless my ($value) = get_var($var);
+        $profile =~ s/\{\{$var\}\}/$value/g;
+    }
+    return $profile;
+}
+
 =head2 adjust_network_conf
 
  adjust_network_conf($profile);
@@ -704,7 +726,7 @@ sub expand_variables {
     my ($profile) = @_;
     # Expand other variables
     my @vars = qw(SCC_REGCODE SCC_REGCODE_HA SCC_REGCODE_GEO SCC_REGCODE_HPC
-      SCC_REGCODE_LTSS SCC_REGCODE_WE SCC_URL ARCH LOADER_TYPE NTP_SERVER_ADDRESS
+      SCC_REGCODE_LTSS SCC_REGCODE_WE SCC_REGCODE_SLES4SAP SCC_URL ARCH LOADER_TYPE NTP_SERVER_ADDRESS
       REPO_SLE_MODULE_DEVELOPMENT_TOOLS SCC_REGCODE_LIVE);
     # Push more variables to expand from the job setting
     my @extra_vars = push @vars, split(/,/, get_var('AY_EXPAND_VARS', ''));
@@ -741,6 +763,24 @@ sub adjust_user_password {
     my ($profile) = @_;
     $profile =~ s/\{\{PASSWORD\}\}/$testapi::password/g;
     return $profile;
+}
+
+=head2 expand_agama_profile
+
+ expand_agama_profile($profile, $profile_expanded);
+
+ Return the PATH of profile with expanded vars
+
+=cut
+
+sub expand_agama_profile {
+    my ($profile, $profile_expanded) = @_;
+    $profile_expanded //= $profile;
+    my $content = expand_agama_variables(get_test_data($profile));
+    save_tmp_file($profile_expanded, $content);
+    my $profile_url = autoinst_url . "/files/$profile_expanded";
+    upload_profile(path => $profile_expanded, profile => $content);
+    return $profile_url;
 }
 
 =head2 upload_profile

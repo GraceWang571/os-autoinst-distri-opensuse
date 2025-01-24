@@ -100,7 +100,9 @@ my $should_use_runargs = sub {
       PUBLIC_CLOUD_SMOKETEST
       PUBLIC_CLOUD_AZURE_NFS_TEST
       PUBLIC_CLOUD_NVIDIA
-      PUBLIC_CLOUD_NETCONFIG);
+      PUBLIC_CLOUD_NETCONFIG
+      PUBLIC_CLOUD_AHB
+      PUBLIC_CLOUD_NEW_INSTANCE_TYPE);
     return grep { exists $bmwqemu::vars{$_} } @public_cloud_variables;
 };
 
@@ -120,6 +122,9 @@ sub load_latest_publiccloud_tests {
     }
     elsif (get_var('PUBLIC_CLOUD_REGISTRATION_TESTS')) {
         loadtest "publiccloud/check_registercloudguest", run_args => $args;
+    }
+    elsif (get_var('PUBLIC_CLOUD_AZURE_AITL')) {
+        loadtest "publiccloud/azure_aitl", run_args => $args;
     }
     elsif (&$should_use_runargs()) {
         loadtest "publiccloud/prepare_instance", run_args => $args;

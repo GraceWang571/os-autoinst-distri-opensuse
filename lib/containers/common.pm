@@ -1,5 +1,6 @@
-# Copyright 2015-2024 SUSE LLC
+# Copyright 2015-2025 SUSE LLC
 # SPDX-License-Identifier: GPL-2.0-or-later
+# Maintainer: qac team <qa-c@suse.de>
 
 package containers::common;
 
@@ -17,6 +18,8 @@ use bootloader_setup 'add_grub_cmdline_settings';
 use serial_terminal 'select_serial_terminal';
 use power_action_utils 'power_action';
 use Mojo::JSON;
+use version_utils qw(is_sle);
+use Utils::Architectures qw(is_aarch64);
 
 our @EXPORT = qw(is_unreleased_sle install_podman_when_needed install_docker_when_needed install_containerd_when_needed
   test_container_runtime test_container_image
@@ -31,7 +34,6 @@ sub is_unreleased_sle {
 sub activate_containers_module {
     my $registered = 0;
     my $json = Mojo::JSON::decode_json(script_output_retry('SUSEConnect -s', timeout => 240, retry => 3, delay => 60));
-    my ($running_version, $sp, $host_distri) = get_os_release;
     foreach (@$json) {
         if ($_->{identifier} =~ 'sle-module-containers' && $_->{status} =~ '^Registered') {
             $registered = 1;
@@ -67,7 +69,7 @@ sub install_oci_runtime {
 }
 
 sub install_podman_when_needed {
-    my $host_os = shift;
+    my ($running_version, $sp, $host_os) = get_os_release;
     my @pkgs = qw(podman);
     if (script_run("which podman") != 0) {
         if ($host_os =~ /centos|rhel/) {
@@ -76,8 +78,7 @@ sub install_podman_when_needed {
             script_retry("apt-get -y install @pkgs", timeout => 300);
         } else {
             # We may run openSUSE with DISTRI=sle and opensuse doesn't have SUSEConnect
-            activate_containers_module if $host_os =~ 'sle';
-            push(@pkgs, 'podman-cni-config') if is_jeos() && is_sle('<=15-SP2');    # 1217509#c8
+            activate_containers_module if ($host_os =~ 'sle' && $running_version =~ "15");
             zypper_call "in @pkgs";
             install_oci_runtime("podman");
         }
@@ -90,7 +91,8 @@ sub install_podman_when_needed {
 }
 
 sub install_docker_when_needed {
-    my $host_os = shift;
+    my ($running_version, $sp, $host_os) = get_os_release;
+    record_info("get_os_release", "'$running_version', '$sp', '$host_os'");
     if (script_run("which docker") != 0) {
         my $ltss_needed = 0;
         if (is_transactional) {
@@ -108,7 +110,7 @@ sub install_docker_when_needed {
         } else {
             if ($host_os =~ 'sle') {
                 # We may run openSUSE with DISTRI=sle and openSUSE does not have SUSEConnect
-                activate_containers_module;
+                activate_containers_module if ($running_version =~ "15");
 
                 # Temporarly enable LTSS product on LTSS systems where it is not present
                 if (get_var('SCC_REGCODE_LTSS') && script_run('test -f /etc/products.d/SLES-LTSS.prod') != 0 && !main_common::is_updates_tests) {
@@ -145,7 +147,7 @@ sub install_docker_when_needed {
 }
 
 sub install_buildah_when_needed {
-    my $host_os = shift;
+    my ($running_version, $sp, $host_os) = get_os_release;
     if (script_run("which buildah") != 0) {
         if ($host_os eq 'centos') {
             assert_script_run "dnf -y update", timeout => 900;
@@ -157,7 +159,7 @@ sub install_buildah_when_needed {
             script_retry('dnf update -y', timeout => 300);
             script_retry('dnf install -y buildah', timeout => 300);
         } else {
-            activate_containers_module if $host_os =~ 'sle';
+            activate_containers_module if ($host_os =~ 'sle' && $running_version =~ "12|15");
             zypper_call('in buildah', timeout => 300);
         }
     }

@@ -6,6 +6,7 @@ use Test::Warnings;
 use Test::MockModule;
 use Test::Mock::Time;
 use List::Util qw(any none all);
+use testapi qw(set_var);
 
 use sles4sap::ipaddr2;
 
@@ -763,40 +764,40 @@ subtest '[ipaddr2_configure_web_server] external_repo' => sub {
     ok((any { /zypper in.*nginx/ } @calls), 'Install nginx using zypper');
 };
 
-subtest '[ipaddr2_registeration_check] all registered' => sub {
+subtest '[ipaddr2_scc_check] all registered' => sub {
     my $ipaddr2 = Test::MockModule->new('sles4sap::ipaddr2', no_auto => 1);
     $ipaddr2->redefine(ipaddr2_bastion_pubip => sub { return '1.2.3.4'; });
     my @calls;
     $ipaddr2->redefine(script_output => sub {
             push @calls, $_[0];
-            # due to the itnernal implementation of the
+            # due to the internal implementation of the
             # function under test, this status is equivalent to `Registered`
             return '[{"status":"Bialetti"}]'; });
 
-    my $ret = ipaddr2_registeration_check(id => 42);
+    my $ret = ipaddr2_scc_check(id => 42);
 
     note("\n  -->  " . join("\n  -->  ", @calls));
     ok((any { /SUSEConnect -s/ } @calls), 'SUSEConnect to check what is registered');
     ok(($ret eq 1), "Is registered ret:$ret");
 };
 
-subtest '[ipaddr2_registeration_check] one not registered' => sub {
+subtest '[ipaddr2_scc_check] one not registered' => sub {
     my $ipaddr2 = Test::MockModule->new('sles4sap::ipaddr2', no_auto => 1);
     $ipaddr2->redefine(ipaddr2_bastion_pubip => sub { return '1.2.3.4'; });
     my @calls;
     $ipaddr2->redefine(script_output => sub {
             push @calls, $_[0];
-            # due to the itnernal implementation of the
+            # due to the internal implementation of the
             # function under test, this status is equivalent to `Registered`
             return '[{"status":"Bialetti"}, {"status":"Not Registered"}]'; });
 
-    my $ret = ipaddr2_registeration_check(id => 42);
+    my $ret = ipaddr2_scc_check(id => 42);
 
     note("\n  -->  " . join("\n  -->  ", @calls));
     ok(($ret eq 0), "Is not registered ret:$ret");
 };
 
-subtest '[ipaddr2_registeration_set]' => sub {
+subtest '[ipaddr2_scc_register]' => sub {
     my $ipaddr2 = Test::MockModule->new('sles4sap::ipaddr2', no_auto => 1);
     $ipaddr2->redefine(ipaddr2_bastion_pubip => sub { return '1.2.3.4'; });
     my @calls;
@@ -807,7 +808,7 @@ subtest '[ipaddr2_registeration_set]' => sub {
             return;
     });
 
-    ipaddr2_registeration_set(id => 42, scc_code => '1234567890');
+    ipaddr2_scc_register(id => 42, scc_code => '1234567890');
 
     note("\n  -->  " . join("\n  -->  ", @calls));
     ok((any { /registercloudguest.*clean/ } @calls), 'registercloudguest clean');
@@ -938,6 +939,49 @@ subtest '[ipaddr2_refresh_repo]' => sub {
 
     note("\n  -->  " . join("\n  -->  ", @calls));
     ok((any { /zypper ref/ } @calls), 'Call zypper ref');
+};
+
+subtest '[get_private_ip_range]' => sub {
+    my %ip_range = sles4sap::ipaddr2::get_private_ip_range();
+    my %expected_value = (vnet_address_range => '192.168.0.0/16', subnet_address_range => '192.168.0.0/24', priv_ip_range => '192.168.0');
+    is_deeply \%ip_range, \%expected_value, "No worker_id, return 192.168.0.0 ip range";
+
+    set_var('WORKER_ID', '123');
+    %ip_range = sles4sap::ipaddr2::get_private_ip_range();
+    $expected_value{vnet_address_range} = '10.3.208.0/21';
+    $expected_value{subnet_address_range} = '10.3.208.0/24';
+    $expected_value{priv_ip_range} = '10.3.208';
+    is_deeply \%ip_range, \%expected_value, "IP range is count according by worker_id";
+    set_var('WORKER_ID', undef);
+};
+
+subtest 'ipaddr2_network_peering_clean' => sub {
+    my $ipaddr2 = Test::MockModule->new('sles4sap::ipaddr2', no_auto => 1);
+    $ipaddr2->redefine(ipaddr2_azure_resource_group => sub { return 'test'; });
+
+    my $peering_string;
+
+    $ipaddr2->redefine(qesap_az_vnet_peering_delete => sub {
+            my (%args) = @_;
+            $peering_string = "source_group is $args{source_group}, target_group is $args{target_group}";
+            return;
+    });
+    ipaddr2_network_peering_clean(ibsm_rg => 'ibsm');
+    is $peering_string, "source_group is test, target_group is ibsm", "Clean network peering successfully";
+};
+
+subtest '[ipaddr2_network_peering_create]' => sub {
+    my $ipaddr2 = Test::MockModule->new('sles4sap::ipaddr2', no_auto => 1);
+    $ipaddr2->redefine(az_network_vnet_get => sub { return 'DavidCuartielles'; });
+    $ipaddr2->redefine(qesap_az_clean_old_peerings => sub { return; });
+    $ipaddr2->redefine(ipaddr2_azure_resource_group => sub { return 'Volta'; });
+
+    my $create_peering = 0;
+    $ipaddr2->redefine(qesap_az_vnet_peering => sub { $create_peering = 1; });
+
+    ipaddr2_network_peering_create(ibsm_rg => 'MassimoBanzi');
+
+    ok $create_peering, "qesap_az_vnet_peering called";
 };
 
 done_testing;

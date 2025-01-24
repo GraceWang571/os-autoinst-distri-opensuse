@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright 2021-2024 SUSE LLC
+# Copyright 2021-2025 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Summary: module loader of container tests
@@ -139,10 +139,9 @@ sub load_host_tests_podman {
     load_firewall_test($run_args);
     # IPv6 is not available on Azure
     loadtest 'containers/podman_ipv6' if (is_public_cloud && is_sle('>=15-SP5') && !is_azure);
-    # Netavark not supported in 15-SP1 and 15-SP2 (due to podman version older than 4.0.0)
-    loadtest 'containers/podman_netavark' unless (is_staging || is_sle("<15-sp3") || is_ppc64le);
+    loadtest 'containers/podman_netavark' unless (is_staging || is_ppc64le);
     loadtest('containers/skopeo', run_args => $run_args, name => $run_args->{runtime} . "_skopeo") unless (is_sle('<15') || is_sle_micro('<5.5'));
-    loadtest 'containers/podman_quadlet' unless (is_sle("<16") || is_sle_micro("<6.1"));
+    loadtest 'containers/podman_quadlet' unless (is_staging || is_sle("<16") || is_sle_micro("<6.1"));
     # https://github.com/containers/podman/issues/5732#issuecomment-610222293
     # exclude rootless podman on public cloud because of cgroups2 special settings
     unless (is_openstack || is_public_cloud) {
@@ -189,9 +188,14 @@ sub load_host_tests_docker {
     load_compose_tests($run_args);
     loadtest('containers/seccomp', run_args => $run_args, name => $run_args->{runtime} . "_seccomp") unless is_sle('<15');
     # Expected to work anywhere except of real HW backends, PC and Micro
-    unless (is_generalhw || is_ipmi || is_public_cloud || is_openstack || is_sle_micro || is_microos || is_leap_micro) {
+    unless (is_generalhw || is_ipmi || is_public_cloud || is_openstack || is_sle_micro || is_microos || is_leap_micro || (is_sle('=12-SP5') && is_aarch64)) {
         loadtest 'containers/validate_btrfs';
     }
+}
+
+sub load_host_tests_multi_runtime {
+    my ($run_args) = @_;
+    loadtest('containers/podman_docker_interop', run_args => $run_args);
 }
 
 sub load_host_tests_containerd_crictl {
@@ -273,7 +277,8 @@ sub load_container_tests {
         # Container Image tests common
         loadtest 'containers/host_configuration';
         if (get_var('BCI_TESTS') && !get_var('BCI_SKIP')) {
-            # bci_version_check required jq from bci_prepare.
+            loadtest 'containers/bci_collect_stats' if (get_var('IMAGE_STORE_DATA'));
+            # Note: bci_version_check requires jq.
             loadtest 'containers/bci_version_check' if (get_var('CONTAINER_IMAGE_TO_TEST') && get_var('CONTAINER_IMAGE_BUILD'));
         }
     }
@@ -338,7 +343,8 @@ sub load_container_tests {
         if (is_container_image_test()) {
             if (get_var('BCI_TESTS')) {
                 unless (get_var('BCI_SKIP')) {
-                    loadtest('containers/bci_prepare') if (check_var('BCI_PREPARE', '1'));
+                    # Implicitly trigger bci_prepare when a custom test repo has been set, otherwise it won't be enabled.
+                    loadtest('containers/bci_prepare') if (check_var('BCI_PREPARE', '1') || get_var('BCI_TESTS_REPO'));
                     loadtest('containers/bci_test', run_args => $run_args, name => 'bci_test_' . $run_args->{runtime});
                     # For Base image we also run traditional image.pm test
                     load_image_test($run_args) if (is_sle(">=15-SP3") && check_var('BCI_TEST_ENVS', 'base'));
@@ -356,8 +362,10 @@ sub load_container_tests {
         } else {
             # Container Host tests
             loadtest 'microos/toolbox' if (/podman/i && !is_staging && (is_sle_micro || is_microos || is_leap_micro));
+            loadtest 'console/enable_mac' if get_var("SECURITY_MAC");
             load_host_tests_podman($run_args) if (/podman/i);
             load_host_tests_docker($run_args) if (/docker/i);
+            load_host_tests_multi_runtime($run_args) if (/multi_runtime/i);
             load_host_tests_containerd_crictl() if (/containerd_crictl/i);
             load_host_tests_containerd_nerdctl() if (/containerd_nerdctl/i);
             loadtest('containers/kubectl') if (/kubectl/i);

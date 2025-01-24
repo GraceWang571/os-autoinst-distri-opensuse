@@ -48,6 +48,7 @@ sub load_config_tests {
 }
 
 sub load_boot_from_disk_tests {
+    return if is_ppc64le && get_var('MACHINE') !~ /ppc64le-emu/i;
     # add additional image handling module for svirt workers
     if (is_s390x()) {
         loadtest 'installation/bootloader_start';
@@ -158,6 +159,7 @@ sub load_selfinstall_boot_tests {
     if (check_var('FIRST_BOOT_CONFIG', 'wizard')) {
         loadtest 'jeos/firstrun';
     }
+    replace_opensuse_repos_tests if is_repo_replacement_required;
 }
 
 sub load_remote_target_tests {
@@ -298,7 +300,9 @@ sub load_journal_check_tests {
 
 sub load_slem_on_pc_tests {
     my $args = OpenQA::Test::RunArgs->new();
-    if (get_var('PUBLIC_CLOUD_DOWNLOAD_TESTREPO')) {
+    if (get_var('PUBLIC_CLOUD_AZURE_AITL')) {
+        loadtest "publiccloud/azure_aitl", run_args => $args;
+    } elsif (get_var('PUBLIC_CLOUD_DOWNLOAD_TESTREPO')) {
         load_publiccloud_download_repos();
     } elsif (get_var('PUBLIC_CLOUD_UPLOAD_IMG')) {
         loadtest("boot/boot_to_desktop");
@@ -319,9 +323,9 @@ sub load_slem_on_pc_tests {
             # AISTACK test verification
             loadtest("publiccloud/ssh_interactive_start", run_args => $args);
             loadtest("publiccloud/create_aistack_env", run_args => $args);
+            loadtest("publiccloud/aistack_rbac_run", run_args => $args);
+            loadtest("publiccloud/aistack_sanity_run", run_args => $args);
             loadtest("publiccloud/ssh_interactive_end", run_args => $args);
-            #loadtest("publiccloud/<saintytest>", run_args => $args);
-            #loadtest("publiccloud/<rbac>", run_args => $args);
         } elsif (is_container_test) {
             loadtest("publiccloud/ssh_interactive_start", run_args => $args);
             loadtest("publiccloud/instance_overview", run_args => $args);

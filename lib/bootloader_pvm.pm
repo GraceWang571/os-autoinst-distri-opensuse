@@ -20,7 +20,7 @@ use testapi;
 use bootloader_setup;
 use registration 'registration_bootloader_params';
 use utils qw(get_netboot_mirror type_string_slow enter_cmd_slow);
-use version_utils 'is_upgrade';
+use version_utils qw(is_agama is_upgrade);
 use Utils::Backends;
 use YuiRestClient;
 use ntlm_auth;
@@ -123,14 +123,27 @@ sub enter_netboot_parameters {
         record_info("Updated boot path for PPC64LE_GRUB_HTTP defined", $mntpoint);
     }
     my $ntlm_p = get_var('NTLM_AUTH_INSTALL') ? $ntlm_auth::ntlm_proxy : '';
-    type_string_slow "linux $mntpoint/linux vga=normal $ntlm_p install=$mirror ";
-    bootmenu_default_params;
-    bootmenu_network_source;
-    specific_bootmenu_params;
-    registration_bootloader_params(utils::VERY_SLOW_TYPING_SPEED) unless get_var('NTLM_AUTH_INSTALL');
-    type_string_slow remote_install_bootmenu_params;
+    if (is_agama) {
+        type_string_slow "linux $mntpoint/linux root=live:http://" . get_var('OPENQA_HOSTNAME') . "/assets/iso/" . get_var('ISO') . " live.password=$testapi::password";
+        # agama.auto and agama.install_url are defined in below function
+        specific_bootmenu_params;
+        type_string_slow " " . get_var('EXTRABOOTPARAMS') if (get_var('EXTRABOOTPARAMS'));
+    }
+    else {
+        type_string_slow "linux $mntpoint/linux vga=normal $ntlm_p install=$mirror ";
+    }
+    # Skipping this setup due to it triggers general code for openSUSE that breaks powerVM scenario
+    unless (is_agama) {
+        bootmenu_default_params;
+        bootmenu_network_source;
+        specific_bootmenu_params;
+        registration_bootloader_params(utils::VERY_SLOW_TYPING_SPEED) unless get_var('NTLM_AUTH_INSTALL');
+        type_string_slow remote_install_bootmenu_params;
+    }
+
     type_string_slow " fips=1" if (get_var('FIPS_INSTALLATION'));
     type_string_slow " UPGRADE=1" if (get_var('UPGRADE'));
+
     send_key 'ret';
     assert_screen "pvm-grub-command-line-fresh-prompt", 180, no_wait => 1;    # kernel is downloaded while waiting
     enter_cmd_slow "initrd $mntpoint/initrd";
@@ -162,11 +175,20 @@ sub prepare_pvm_installation {
         return (bootloader_pvm::prepare_pvm_installation $boot_attempt);
     }
 
-    assert_screen("run-yast-ssh", 300);
+    if (is_agama) {
+        record_info("Installing", "Please check the expected product is being installed");
+        assert_screen('agama-installer-live-root', 400);
+    }
+    else {
+        assert_screen("run-yast-ssh", 300);
+    }
 
-    if (!is_upgrade && !get_var('KEEP_DISKS')) {
+    # For Agama unattended tests, disks will be formatted by default
+    if (!is_upgrade && !get_var('KEEP_DISKS') && !get_var('AGAMA_AUTO')) {
         prepare_disks;
     }
+
+    return if is_agama;
     # Switch to installation console (ssh or vnc)
     select_console('installation');
     # We need to start installer only if it's pure ssh installation

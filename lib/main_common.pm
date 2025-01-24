@@ -11,7 +11,7 @@ use base Exporter;
 use File::Basename;
 use File::Find;
 use Exporter;
-use testapi qw(check_var get_var get_required_var set_var check_var_array diag);
+use testapi qw(check_var get_var get_required_var set_var check_var_array get_var_array diag);
 use autotest;
 use utils;
 use wicked::TestContext;
@@ -646,7 +646,7 @@ sub load_jeos_tests {
     loadtest "jeos/record_machine_id";
     loadtest "console/force_scheduled_tasks";
     # this test case also disables grub timeout
-    loadtest "jeos/grub2_gfxmode";
+    loadtest "jeos/grub2_gfxmode" unless is_bootloader_sdboot;
     unless (get_var('INSTALL_LTP') || get_var('SYSTEMD_TESTSUITE')) {
         # jeos/diskusage as of now works only with BTRFS
         loadtest "jeos/diskusage" if get_var('FILESYSTEM', 'btrfs') =~ /btrfs/;
@@ -1265,7 +1265,7 @@ sub load_consoletests {
     loadtest "console/zypper_log";
     if (!get_var("LIVETEST")) {
         loadtest "console/yast2_i";
-        loadtest "console/yast2_bootloader";
+        loadtest "console/yast2_bootloader" unless is_bootloader_sdboot;
     }
     loadtest "console/vim" if is_opensuse || is_sle('<15') || !get_var('PATTERNS') || check_var_array('PATTERNS', 'enhanced_base');
 # textmode install comes without firewall by default atm on openSUSE. For virtualization server xen and kvm is disabled by default: https://fate.suse.com/324207
@@ -1641,6 +1641,7 @@ sub load_extra_tests_zypper {
     replace_opensuse_repos_tests if is_repo_replacement_required;
     loadtest "console/zypper_lr_validate" unless is_sle '15+';
     loadtest "console/zypper_ref";
+    loadtest "console/snapper_zypp";
     unless (is_jeos) {
         loadtest "console/zypper_info";
     }
@@ -2411,26 +2412,94 @@ sub set_mu_virt_vars {
     }
 
     set_var('UPDATE_PACKAGE', $_update_package);
-    bmwqemu::save_vars();
     diag("BUILD is $BUILD, UPDATE_PACKAGE is set to " . get_var('UPDATE_PACKAGE', ''));
 
     # Check if repo is LTSS-Extended-Security and sets EXTENDED_SECURITY to 1
     set_var('EXTENDED_SECURITY', (get_var('INCIDENT_REPO') =~ /LTSS-Extended-Security/) ? 1 : 0);
+
     # Set PATCH_WITH_ZYPPER
     set_var('PATCH_WITH_ZYPPER', 1) unless (check_var('PATCH_WITH_ZYPPER', 0));
+
+    # Set AUTOYAST
+    if (check_var('HOST_INSTALL_AUTOYAST', 1) or check_var('AUTOYAST', 1)) {
+        if (is_sle('15+')) {
+            set_var('AUTOYAST', 'virtualization/autoyast/host_15.xml.ep');
+        } elsif (is_sle('12+')) {
+            set_var('AUTOYAST', 'virtualization/autoyast/host_12.xml.ep');
+        }
+    }
+
+    # Set PXE resource
+    unless (get_var('PXE_PRODUCT_NAME') || get_var('MIRROR_HTTP')) {
+        unless (get_var('IPXE')) {
+            # PRG1 lab SUTs use pxe way
+            my $pxe_product_name = "SLE-" . get_required_var('VERSION');
+            if (is_sle('15+')) {
+                $pxe_product_name .= "-Full-LATEST";
+            } elsif (is_sle('12+')) {
+                $pxe_product_name .= "-Server-GM";
+            }
+            set_var('PXE_PRODUCT_NAME', $pxe_product_name);
+        } else {
+            # OSD SUTs use ipxe way
+            my $mirror_http = 'http://' . get_required_var('OPENQA_HOSTNAME') . '/assets/repo/fixed/';
+            $mirror_http .= 'SLE-' . get_required_var('VERSION');
+            if (is_sle('15+')) {
+                $mirror_http .= '-Full-' . get_required_var('ARCH') . '-GM-Media1/';
+            } elsif (is_sle('12+')) {
+                $mirror_http .= '-Server-DVD-' . get_required_var('ARCH') . '-GM-DVD1/';
+            }
+            set_var('MIRROR_HTTP', $mirror_http);
+        }
+    }
+
+    # Set SCC_REGCODE_LTSS(for host)
+    my %ltss_products = @{get_var_array("LTSS_REGCODES_SECRET")};
+    # $product final format: 12.5, 15.4, 15
+    my $product = get_required_var('VERSION');
+    $product =~ s/-SP/\./i;
+    diag("Host product is $product.");
+    if (exists $ltss_products{"$product"}) {
+        set_var('SCC_REGCODE_LTSS', $ltss_products{"$product"});
+    }
+
+    # Set SCC_REGCODE_LTSS_ES(for host), now only 12SP5 has this
+    my %ltss_es_products = @{get_var_array("LTSS_ES_REGCODES_SECRET")};
+    if (exists $ltss_es_products{"$product"}) {
+        set_var('SCC_REGCODE_LTSS_ES', $ltss_es_products{"$product"});
+    }
+
+    # Set SCC_ADDONS
+    my $scc_addons = '';
+    $scc_addons .= 'ltss' if (exists $ltss_products{"$product"});
+    if (is_sle('15+')) {
+        $scc_addons .= ',' if ($scc_addons);
+        $scc_addons .= 'base,sdk,serverapp,desktop';
+    }
+    set_var('SCC_ADDONS', "$scc_addons");
+
+    # Set TERADATA
+    if (get_var('INCIDENT_REPO', '') =~ /TERADATA/) {
+        # SLE12SP3 TERADATA test can't set TERADATA value
+        set_var('TERADATA', get_var('VERSION')) unless (is_sle('=12-sp3'));
+    }
+
+    # Save vars
+    bmwqemu::save_vars();
 }
 
 sub load_hypervisor_tests {
     return unless (get_var('HOST_HYPERVISOR') =~ /xen|kvm|qemu/);
 
-    # Some vars will affect loadtest logic, so need to be run on top
-    set_mu_virt_vars;
-
     if (check_var('ENABLE_HOST_INSTALLATION', 1)) {
         if (get_var('AUTOYAST')) {
             loadtest "autoyast/prepare_profile";
         }
-        loadtest "boot/boot_from_pxe";
+        if (get_var("IPXE")) {
+            loadtest "installation/ipxe_install";
+        } else {
+            loadtest "boot/boot_from_pxe";
+        }
         if (get_var('AUTOYAST')) {
             loadtest "autoyast/installation";
         } else {

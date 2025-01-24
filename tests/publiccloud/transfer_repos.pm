@@ -24,7 +24,6 @@ sub run {
 
     my $instance = $args->{my_instance};
     my $remote = $instance->username . '@' . $args->{my_instance}->public_ip;
-    my @addons = split(/,/, get_var('SCC_ADDONS', ''));
     my $skip_mu = get_var('PUBLIC_CLOUD_SKIP_MU', 0);
     my $repodir = "/opt/repos/";
     # Trigger to skip the download to speed up verification runs
@@ -64,7 +63,6 @@ sub run {
         my $slmrepo;
         foreach my $repo (@repos) {
             if (is_sle_micro(">=6.0")) {
-                $repo =~ s/ibs\/SUSE:\/ALP:\/Products:\/Marble:\///;
                 $slmrepo = $repo;
             }
             assert_script_run("echo $repo | tee -a /tmp/transfer_repos.txt");

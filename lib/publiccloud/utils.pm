@@ -18,9 +18,9 @@ use strict;
 use warnings;
 use testapi;
 use utils;
-use version_utils qw(is_sle is_public_cloud get_version_id is_transactional is_openstack is_sle_micro);
+use version_utils qw(is_sle is_public_cloud get_version_id is_transactional is_openstack is_sle_micro check_version);
 use transactional qw(reboot_on_changes trup_call process_reboot);
-use registration;
+use registration qw(get_addon_fullname add_suseconnect_product);
 use maintenance_smelt qw(is_embargo_update);
 
 # Indicating if the openQA port has been already allowed via SELinux policies
@@ -52,6 +52,45 @@ our @EXPORT = qw(
   ssh_update_transactional_system
 );
 
+# Check if we are a BYOS test run
+sub is_byos() {
+    return is_public_cloud && get_var('FLAVOR') =~ 'BYOS';
+}
+
+# Check if we are a OnDemand test run
+sub is_ondemand() {
+    # By convention OnDemand images are not marked explicitly.
+    # Check all the other flavors, and if they don't match, it must be on_demand.
+    return is_public_cloud && (!is_byos());    # When introducing new flavors, add checks here accordingly.
+}
+
+# Check if we are on an AWS test run
+sub is_ec2() {
+    return is_public_cloud && check_var('PUBLIC_CLOUD_PROVIDER', 'EC2');
+}
+
+# Check if we are on an Azure test run
+sub is_azure() {
+    return is_public_cloud && check_var('PUBLIC_CLOUD_PROVIDER', 'AZURE');
+}
+
+# Check if we are on an GCP test run
+sub is_gce() {
+    return is_public_cloud && check_var('PUBLIC_CLOUD_PROVIDER', 'GCE');
+}
+
+sub is_container_host() {
+    return is_public_cloud && get_var('FLAVOR') =~ 'CHOST';
+}
+
+sub is_hardened() {
+    return is_public_cloud && get_var('FLAVOR') =~ 'Hardened';
+}
+
+sub is_cloudinit_supported {
+    return ((is_azure || is_ec2) && !is_sle_micro);
+}
+
 # Get the current UTC timestamp as YYYY/mm/dd HH:MM:SS
 sub utc_timestamp {
     my @weekday = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat");
@@ -60,40 +99,83 @@ sub utc_timestamp {
     return sprintf("%04d/%02d/%02d %02d:%02d:%02d", $year, $mon, $day, $hour, $min, $sec);
 }
 
+
+=head2 ssh_add_suseconnect_product
+
+    ssh_add_suseconnect_product($remote, $name, [program => $program, [version => $version, [arch => $arch, [params => $params, [timeout => $timeout, [retries => $retries, [delay => $delay]]]]]]]);
+
+Register addon in the SUT
+=cut
+
+sub ssh_add_suseconnect_product {
+    my ($remote, $name, %args) = @_;
+    if ($args{program} eq 'registercloudguest') {
+        script_retry(sprintf("ssh %s sudo %s %s", $remote, $args{program}, $args{params}), delay => $args{delay}, retry => $args{retries}, timeout => $args{timeout});
+    } else {
+        script_retry(sprintf("ssh %s sudo %s -p %s/%s/%s %s", $remote, $args{program}, $name, $args{version}, $args{arch}, $args{params}), delay => $args{delay}, retry => $args{retries}, timeout => $args{timeout});
+    }
+}
+
 sub register_addon {
     my ($remote, $addon) = @_;
+
     my $arch = get_var('PUBLIC_CLOUD_ARCH') // "x86_64";
     $arch = "aarch64" if ($arch eq "arm64");
     my $timestamp = utc_timestamp();
     record_info($addon, "Going to register '$addon' addon\nUTC: $timestamp");
     my $cmd_time = time();
-    # ssh_add_suseconnect_product($remote, $name, $version, $arch, $params, $timeout, $retries, $delay)
     my ($timeout, $retries, $delay) = (300, 3, 120);
+    my $program = get_var("PUBLIC_CLOUD_SCC_ENDPOINT", "registercloudguest");
+
+    assert_script_run "sftp $remote:/etc/os-release /tmp/os-release";
+    assert_script_run 'source /tmp/os-release';
+
     if ($addon =~ /ltss/) {
-        ssh_add_suseconnect_product($remote, get_addon_fullname($addon), '${VERSION_ID}', $arch, "-r " . get_required_var('SCC_REGCODE_LTSS'), $timeout, $retries, $delay);
+        ssh_add_suseconnect_product($remote, get_addon_fullname($addon), program => $program, version => '${VERSION_ID}', arch => $arch, params => "-r " . get_required_var('SCC_REGCODE_LTSS'), timeout => $timeout, retries => $retries, delay => $delay);
+    } elsif (is_ondemand) {
+        record_info($addon, 'This is on demand image, we will not register this addon.');
     } elsif (is_sle('<15') && $addon =~ /tcm|wsm|contm|asmm|pcm/) {
-        ssh_add_suseconnect_product($remote, get_addon_fullname($addon), '`echo ${VERSION} | cut -d- -f1`', $arch, '', $timeout, $retries, $delay);
+        ssh_add_suseconnect_product($remote, get_addon_fullname($addon), program => 'SUSEConnect', version => '`echo ${VERSION} | cut -d- -f1`', arch => $arch, params => '', timeout => $timeout, retries => $retries, delay => $delay);
     } elsif (is_sle('<15') && $addon =~ /sdk|we/) {
-        ssh_add_suseconnect_product($remote, get_addon_fullname($addon), '${VERSION_ID}', $arch, '', $timeout, $retries, $delay);
+        ssh_add_suseconnect_product($remote, get_addon_fullname($addon), program => 'SUSEConnect', version => '${VERSION_ID}', arch => $arch, params => '', timeout => $timeout, retries => $retries, delay => $delay);
     } else {
         if ($addon =~ /nvidia/i) {
             (my $version = get_version_id(dst_machine => $remote)) =~ s/^(\d+).*/$1/m;
-            ssh_add_suseconnect_product($remote, get_addon_fullname($addon), $version, $arch, '', $timeout, $retries, $delay);
+            ssh_add_suseconnect_product($remote, get_addon_fullname($addon), program => 'SUSEConnect', version => $version, arch => $arch, params => '', timeout => $timeout, retries => $retries, delay => $delay);
         } else {
-            ssh_add_suseconnect_product($remote, get_addon_fullname($addon), undef, $arch, '', $timeout, $retries, $delay);
+            ssh_add_suseconnect_product($remote, get_addon_fullname($addon), program => 'SUSEConnect', version => '${VERSION_ID}', arch => $arch, params => '', timeout => $timeout, retries => $retries, delay => $delay);
         }
     }
     record_info('SUSEConnect time', 'The command SUSEConnect -r ' . get_addon_fullname($addon) . ' took ' . (time() - $cmd_time) . ' seconds.');
 }
 
+=head2 ssh_remove_suseconnect_product
+
+    ssh_remove_suseconnect_product($name, [$version, [$arch, [$params]]]);
+
+Deregister addon in SUT
+=cut
+
+sub ssh_remove_suseconnect_product {
+    my ($remote, $name, $version, $arch, $params) = @_;
+    assert_script_run "sftp $remote:/etc/os-release /tmp/os-release";
+    assert_script_run 'source /tmp/os-release';
+    script_retry(sprintf("ssh $remote sudo SUSEConnect -d -p $name/$version/$arch $params", $remote, $name, $version, $arch, $params), retry => 5, delay => 60, timeout => 180);
+}
+
 sub deregister_addon {
     my ($remote, $addon) = @_;
+
     my $arch = get_var('PUBLIC_CLOUD_ARCH', 'x86_64');
     $arch = "aarch64" if ($arch eq "arm64");
     my $timestamp = utc_timestamp();
     record_info($addon, "Going to deregister '$addon' addon\nUTC: $timestamp");
     my $cmd_time = time();
     my ($timeout, $retries, $delay) = (300, 3, 120);
+
+    assert_script_run "sftp $remote:/etc/os-release /tmp/os-release";
+    assert_script_run 'source /tmp/os-release';
+
     if ($addon =~ /ltss/) {
         # ssh_remove_suseconnect_product($remote, $name, $version, $arch, $params, $timeout, $retries, $delay)
         ssh_remove_suseconnect_product($remote, get_addon_fullname($addon), '${VERSION_ID}', $arch, "-r " . get_required_var('SCC_REGCODE_LTSS'), $timeout, $retries, $delay);
@@ -113,9 +195,23 @@ sub registercloudguest {
     my $path = is_sle('>15') && is_sle('<15-SP3') ? '/usr/sbin/' : '';
     my $suseconnect = $path . get_var("PUBLIC_CLOUD_SCC_ENDPOINT", "registercloudguest");
     my $cmd_time = time();
-    # Check what version of registercloudguest binary we use
-    $instance->ssh_script_run(cmd => "rpm -qa cloud-regionsrv-client");
+
+    # Check what version of registercloudguest binary we use, chost images have none pre-installed
+    my $version = $instance->ssh_script_output(cmd => 'rpm -q --queryformat "%{VERSION}\n" cloud-regionsrv-client', proceed_on_failure => 1);
+    if ($version =~ /cloud-regionsrv-client is not installed/) {
+        die 'cloud-regionsrv-client should not be installed' if !is_container_host;
+    } else {
+        # Only a specific version of the package has issue and only on a specific SP
+        # Do not activate the workaround if the user explicitly decide using a specific ENDPOINT
+        if (is_sle('15-SP2+') && check_version('<10.1.7', $version) && !get_var('PUBLIC_CLOUD_SCC_ENDPOINT')) {
+            record_soft_failure("bsc#1217583 IPv6 handling during registration. Force use SUSEConnect to work around it.");
+            $suseconnect = 'SUSEConnect';
+        }
+    }
     $instance->ssh_script_retry(cmd => "sudo $suseconnect -r $regcode", timeout => 420, retry => 3, delay => 120);
+    if (script_run('ssh -O check ' . $instance->username . '@' . $instance->public_ip) == 0) {
+        assert_script_run('ssh -O exit ' . $instance->username . '@' . $instance->public_ip);
+    }
     record_info('registeration time', 'The registration took ' . (time() - $cmd_time) . ' seconds.');
 }
 
@@ -161,45 +257,6 @@ sub validate_repo {
         return 1;
     }
     die "Unexpected URL \"$maintrepo\"";
-}
-
-# Check if we are a BYOS test run
-sub is_byos() {
-    return is_public_cloud && get_var('FLAVOR') =~ 'BYOS';
-}
-
-# Check if we are a OnDemand test run
-sub is_ondemand() {
-    # By convention OnDemand images are not marked explicitly.
-    # Check all the other flavors, and if they don't match, it must be on_demand.
-    return is_public_cloud && (!is_byos());    # When introducing new flavors, add checks here accordingly.
-}
-
-# Check if we are on an AWS test run
-sub is_ec2() {
-    return is_public_cloud && check_var('PUBLIC_CLOUD_PROVIDER', 'EC2');
-}
-
-# Check if we are on an Azure test run
-sub is_azure() {
-    return is_public_cloud && check_var('PUBLIC_CLOUD_PROVIDER', 'AZURE');
-}
-
-# Check if we are on an GCP test run
-sub is_gce() {
-    return is_public_cloud && check_var('PUBLIC_CLOUD_PROVIDER', 'GCE');
-}
-
-sub is_container_host() {
-    return is_public_cloud && get_var('FLAVOR') =~ 'CHOST';
-}
-
-sub is_hardened() {
-    return is_public_cloud && get_var('FLAVOR') =~ 'Hardened';
-}
-
-sub is_cloudinit_supported {
-    return ((is_azure || is_ec2) && !is_sle_micro);
 }
 
 # Get credentials from the Public Cloud micro service, which requires user

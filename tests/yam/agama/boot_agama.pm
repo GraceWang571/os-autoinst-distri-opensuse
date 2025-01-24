@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 # Summary: Boot to agama adding bootloader kernel parameters and expecting web ui up and running.
-# At the moment redirecting to legacy handling for s390x booting.
+# At the moment redirecting to legacy handling for remote architectures booting.
 # Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
 
 use base "installbasetest";
@@ -10,22 +10,30 @@ use strict;
 use warnings;
 
 use testapi;
+use autoyast qw(expand_agama_profile);
 use Utils::Architectures;
 use Utils::Backends;
 
 use Mojo::Util 'trim';
 use File::Basename;
+use Yam::Agama::agama_base 'upload_agama_logs';
 
 BEGIN {
     unshift @INC, dirname(__FILE__) . '/../../installation';
 }
 use bootloader_s390;
 use bootloader_zkvm;
+use bootloader_pvm;
+
+sub post_fail_hook {
+    Yam::Agama::agama_base::upload_agama_logs();
+}
 
 sub run {
     my $self = shift;
 
-    # for now using legacy code to handle s390x
+    # Please, avoid adding code here that would be a dependency for specific booting implementations
+    # For now using legacy code to handle remote architectures
     if (is_s390x()) {
         if (is_backend_s390x()) {
             record_info('bootloader_s390x');
@@ -36,6 +44,10 @@ sub run {
         }
         return;
     }
+    elsif (is_pvm_hmc()) {
+        $self->bootloader_pvm::boot_pvm();
+        return;
+    }
 
     my $grub_menu = $testapi::distri->get_grub_menu_agama();
     my $grub_entry_edition = $testapi::distri->get_grub_entry_edition();
@@ -43,7 +55,8 @@ sub run {
 
     # prepare kernel parameters
     if (my $agama_auto = get_var('AGAMA_AUTO')) {
-        my $path = data_url($agama_auto);
+        my $path = expand_agama_profile($agama_auto);
+        set_var('AGAMA_AUTO', $path);
         set_var('EXTRABOOTPARAMS', get_var('EXTRABOOTPARAMS', '') . " agama.auto=\"$path\"");
     }
     my @params = split ' ', trim(get_var('EXTRABOOTPARAMS', ''));

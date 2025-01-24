@@ -18,12 +18,14 @@ use constant {
     VERSION => [
         qw(
           is_sle
+          is_sled
           is_pre_15
           is_microos
           is_leap_micro
           is_sle_micro
           is_micro
           is_alp
+          is_agama
           is_selfinstall
           is_gnome_next
           is_jeos
@@ -402,6 +404,15 @@ sub is_sle {
 
     # Version check
     return check_version($query, $version, qr/\d{2}(?:-sp\d)?/);
+}
+
+=head2 is_sled
+
+Check if distribution is SLED
+=cut
+
+sub is_sled {
+    return check_var('SLE_PRODUCT', 'sled');
 }
 
 =head2 is_transactional
@@ -981,9 +992,18 @@ Returns true if the distro has SELinux as default MAC
 =cut
 
 sub has_selinux_by_default {
-    return (is_tumbleweed && check_var("VERSION", "Staging:D")) || is_sle_micro('5.4+') || is_leap_micro('5.4+') || is_microos;
+    return (is_tumbleweed && check_var("VERSION", "Staging:D")) || is_sle_micro('5.4+') || is_leap_micro('5.4+') || is_microos || is_sle('16+');
 }
 
 sub has_selinux {
     return get_var('SELINUX', has_selinux_by_default);
+}
+
+=head2 is_agama
+
+Check if agama installation is being used
+=cut
+
+sub is_agama {
+    return (get_var('AGAMA') || get_var('AGAMA_AUTO'));
 }

@@ -58,7 +58,6 @@ our @EXPORT = qw(
   add_grub_cmdline_settings
   add_grub_xen_replace_cmdline_settings
   change_grub_config
-  get_cmdline_var
   grep_grub_cmdline_settings
   grep_grub_settings
   grub_mkconfig
@@ -72,9 +71,11 @@ our @EXPORT = qw(
 );
 
 our $zkvm_img_path = "/var/lib/libvirt/images";
+my $in_grub_edit = 0;
 
 use constant GRUB_CFG_FILE => "/boot/grub2/grub.cfg";
 use constant GRUB_DEFAULT_FILE => "/etc/default/grub";
+use constant GRUB_CMDLINE_VAR => "GRUB_CMDLINE_LINUX_DEFAULT";
 
 # prevent grub2 timeout; 'esc' would be cleaner, but grub2-efi falls to the menu then
 # 'up' also works in textmode and UEFI menues.
@@ -484,25 +485,35 @@ sub uefi_bootmenu_params {
     # Locate gfxpayload parameter and update it
     # The main branch should be used only for bootable pre-installed images that contain already full
     # grub2 configuration
+    my $linux = 0;
     if (get_var('BOOT_HDD_IMAGE') && (is_jeos || is_leap_micro || is_microos || is_sle_micro)) {
-        # skip healthchecker lines
+        # there is always a blank line
+        # sle 12-sp5 has no load_video
+        # if there is a healthchecker, skip it
+        my $gfx = 2;
         if (is_leap_micro || is_microos || is_sle_micro) {
-            send_key "down" for (1 .. 4);
+            $gfx += 5;
+        } else {
+            $gfx++;
         }
 
-        # navigate to gfxpayload=keep
-        my $gfx = is_sle('=12-SP5') ? 2 : 3;
+        # navigate to gfxpayload=keep and change its settings
+        # OFW images do not have any gfxpayload, so jump over load_video
         send_key "down" for (1 .. $gfx);
-        wait_screen_change(sub { send_key "end"; }, 5);
-        # delete "keep" word
-        send_key "backspace" for (1 .. 4);
-        # hardcoded the value of gfxpayload to 1024x768
-        type_string "1024x768";
-        assert_screen "gfxpayload_changed", 10;
+        if (get_var('OFW')) {
+            $linux = -1;
+        } else {
+            wait_screen_change(sub { send_key "end"; }, 5);
+            # delete "keep" word
+            send_key "backspace" for (1 .. 4);
+            # hardcoded the value of gfxpayload to 1024x768
+            type_string "1024x768";
+            assert_screen "gfxpayload_changed", 10;
+        }
 
         # navigate to the beginning of the line containing *linux* command
         wait_screen_change(sub { send_key "home"; }, 5);
-        my $linux = is_sle('=12-SP5') ? 2 : 6;
+        $linux += is_sle('=12-SP5') ? 2 : 6;
         # On Leap/SLE we need to move down (grub 2.04)
         # skip additional movement downwards in
         # sle15sp4+, leap15.4+ and TW (grub 2.06)
@@ -510,9 +521,9 @@ sub uefi_bootmenu_params {
         if (get_var('FLAVOR', '') =~ /encrypt/i) {
             $linux += is_sle_micro('6.1+') ? 11 : 10;
         }
-        send_key "down" for (1 .. $linux);
     }
     else {
+        $linux = 4;
         for (1 .. 2) { send_key "down"; }
         send_key "end";
         # delete "keep" word
@@ -524,8 +535,15 @@ sub uefi_bootmenu_params {
         send_key "home";
         for (1 .. 2) { send_key "up"; }
         sleep 5;
-        for (1 .. 4) { send_key "down"; }
     }
+
+    # flag, in order to skip more movement in grub2 submenu in case of powerPC
+    $in_grub_edit = 1 if (get_var('OFW') && is_sle_micro);
+
+    # jump to linux kernel bootparams
+    wait_screen_change(sub {
+            send_key "down" for (1 .. $linux);
+    }, 3);
 
     send_key "end";
     save_screenshot();
@@ -578,14 +596,16 @@ sub bootmenu_default_params {
     my (%args) = @_;
     my @params;
     if (get_var('OFW')) {
-        # edit menu, wait until we get to grub edit
-        wait_screen_change { send_key "e" };
-        # go down to kernel entry
-        send_key "down";
-        send_key "down";
-        send_key "down";
-        wait_screen_change { send_key "end" };
-        wait_still_screen(1);
+        if (!$in_grub_edit) {
+            # edit menu, wait until we get to grub edit
+            wait_screen_change { send_key "e" };
+            # go down to kernel entry
+            send_key "down";
+            send_key "down";
+            send_key "down";
+            wait_screen_change { send_key "end" };
+            wait_still_screen(1);
+        }
         # load kernel manually with append
         if (check_var('VIDEOMODE', 'text')) {
             push @params, "textmode=1";
@@ -856,6 +876,16 @@ sub specific_bootmenu_params {
     }
     if (get_var("AUTOUPGRADE") || get_var("AUTOYAST") && (get_var("UPGRADE_FROM_AUTOYAST") || get_var("UPGRADE"))) {
         push @params, "autoupgrade=1";
+    }
+
+    if (my $agama_auto = get_var('AGAMA_AUTO')) {
+        my $url = autoyast::expand_agama_profile($agama_auto);
+        $url = shorten_url($url) if (is_backend_s390x && !is_opensuse);
+        push @params, "agama.auto=$url";
+    }
+
+    if (my $agama_install_url = get_var('AGAMA_INSTALL_URL')) {
+        push @params, "agama.install_url=$agama_install_url";
     }
 
     # Boot the system with the debug options if shutdown takes suspiciously long time.
@@ -1341,7 +1371,7 @@ GRUB_CMDLINE_LINUX_DEFAULT) in /etc/default/grub, return 1 if found.
 
 sub grep_grub_cmdline_settings {
     my ($pattern, $search) = @_;
-    $search //= get_cmdline_var();
+    $search //= '^' . GRUB_CMDLINE_VAR;
     return grep_grub_settings($search . ".*${pattern}");
 }
 
@@ -1388,7 +1418,7 @@ sub add_grub_cmdline_settings {
         {
             add => $add,
             update_grub => 0,
-            search => get_cmdline_var(),
+            search => '^' . GRUB_CMDLINE_VAR,
         },
         ['update_grub', 'search'],
         @_
@@ -1440,7 +1470,7 @@ sub replace_grub_cmdline_settings {
             old => $old,
             new => $new,
             update_grub => 0,
-            search => get_cmdline_var(),
+            search => '^' . GRUB_CMDLINE_VAR,
         },
         ['update_grub', 'search'],
         @_
@@ -1499,19 +1529,6 @@ sub grub_mkconfig {
     $config //= GRUB_CFG_FILE;
     my $grub_update = is_transactional ? 'transactional-update -c grub.cfg' : "grub2-mkconfig -o $config";
     assert_script_run "${grub_update}";
-}
-
-=head2 get_cmdline_var
-
-    get_cmdline_var();
-
-Get default grub cmdline variable:
-GRUB_CMDLINE_LINUX for JeOS, GRUB_CMDLINE_LINUX_DEFAULT for the rest.
-=cut
-
-sub get_cmdline_var {
-    my $label = is_jeos() ? 'GRUB_CMDLINE_LINUX' : 'GRUB_CMDLINE_LINUX_DEFAULT';
-    return "^${label}=";
 }
 
 =head2 parse_bootparams_in_serial

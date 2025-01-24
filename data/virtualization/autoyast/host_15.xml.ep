@@ -35,6 +35,12 @@
     % unless ($check_var->('PATCH_WITH_ZYPPER', '1')) {
   <add-on>
     <add_on_products config:type="list">
+      % if ($check_var->('VERSION', '15-SP2')) {
+      <listentry>
+        <media_url>http://updates.nue.suse.com/download/SUSE/Updates/SLE-Product-SLES/15-SP2-LTSS-TERADATA/x86_64/update/</media_url>
+	<alias>SLES15-SP2-LTSS-TERADATA</alias>
+      </listentry>
+      % }
       % my $n =0;
       % for my $repo (@$repos) {
       <listentry>
@@ -293,6 +299,28 @@
     </user>
   </users>
   <scripts>
+    <pre-scripts config:type="list">
+      <script>
+        <filename>pre_erase_all_disks.sh</filename>
+        <interpreter>shell</interpreter>
+        <source><![CDATA[
+#!/bin/sh
+disks=$(lsblk -n -l -o NAME -d -e 7,11,254);
+for disk in $disks;do
+    echo "Wiping /dev/$disk..."
+    wipefs -af /dev/$disk
+    sync
+    parted -s /dev/$disk mklabel gpt
+    sync
+done
+echo "All disks are wiped out."
+lsblk
+]]>
+        </source>
+        <feedback config:type="boolean">false</feedback>
+        <notification>Please wait while pre-script is running...</notification>
+      </script>
+    </pre-scripts>
     <post-scripts config:type="list">
       % if ($check_var->('SYSTEM_ROLE', 'xen') && $get_var->('VERSION') gt '15-SP5') {
       <script>

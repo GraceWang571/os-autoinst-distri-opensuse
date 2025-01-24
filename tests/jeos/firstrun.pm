@@ -14,7 +14,7 @@ use strict;
 use warnings;
 use lockapi qw(mutex_create mutex_wait);
 use testapi;
-use version_utils qw(is_jeos is_sle is_tumbleweed is_leap is_opensuse is_microos is_sle_micro is_vmware is_bootloader_sdboot);
+use version_utils qw(is_jeos is_sle is_tumbleweed is_leap is_opensuse is_microos is_sle_micro is_vmware is_bootloader_sdboot has_selinux_by_default);
 use Utils::Architectures;
 use Utils::Backends;
 use jeos qw(expect_mount_by_uuid);
@@ -112,11 +112,29 @@ sub verify_partition_label {
     # The RPi firmware needs MBR. s390x images also use MBR.
     # Note: JeOS-for-RaspberryPi means "kiwi-templates-Minimal" and JeOS-for-RPi means "community JeOS".
     # In sle-micro the raw aarch64 images are used for RPi, hence they have contain `dos`
-    if (is_s390x || check_var('FLAVOR', 'JeOS-for-RaspberryPi') || check_var('FLAVOR', 'JeOS-for-RPi') || (is_sle_micro && is_aarch64 && get_var('FLAVOR', '') =~ /(^Base$|^Default$)/)) {
+    if (is_s390x || get_var('FLAVOR', '') =~ /JeOS-for-RaspberryPi/ || check_var('FLAVOR', 'JeOS-for-RPi') || (is_sle_micro && is_aarch64 && get_var('FLAVOR', '') =~ /(^Base$|^Default$)/)) {
         $label = 'dos';
     }
 
     script_output('sfdisk -l') =~ m/Disklabel type:\s+$label/ or die "Wrong partion label found, expected '$label'";
+}
+
+sub verify_selinux {
+    if (has_selinux_by_default) {
+        # SELinux is default, should be enabled
+        validate_script_output("sestatus", sub { m/SELinux status:.*enabled/ });
+    } else {
+        # SELinux is not default, but might be supported
+        my $selinux_supported = script_run("grep -qw selinux /sys/kernel/security/lsm") == 0;
+        if ($selinux_supported) {
+            # supported, so it must be disabled
+            assert_script_run("which sestatus", fail_message => "SELinux is supported but 'sestatus' is not available");
+            validate_script_output("sestatus", sub { m/SELinux status:.*disabled/ });
+        } else {
+            # otherwise, then for sure /sys/fs/selinux can't exist
+            assert_script_run("! test -d /sys/fs/selinux", fail_message => "SELinux is not supported but /sys/fs/selinux exists");
+        }
+    }
 }
 
 sub create_user_in_terminal {
@@ -405,6 +423,7 @@ sub run {
     verify_norepos unless is_opensuse;
     verify_bsc if is_jeos;
     verify_partition_label;
+    verify_selinux;
 }
 
 sub test_flags {

@@ -28,7 +28,7 @@ variable "name" {
 }
 
 variable "type" {
-  default = "t2.large"
+  default = "t3a.large"
 }
 
 variable "image_id" {
@@ -117,8 +117,7 @@ resource "aws_instance" "openqa" {
     openqa_created_id   = element(random_id.service.*.hex, count.index)
   }, var.tags)
 
-  ebs_block_device {
-    device_name = "/dev/sda1"
+  root_block_device {
     volume_size = var.root-disk-size 
     volume_type = "gp3"
   }

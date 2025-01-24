@@ -119,11 +119,6 @@ sub prepare_parmfile {
         $params .= " autoyast=" . $url;
         set_var('AUTOYAST', $url);
     }
-    if (get_var('AGAMA_AUTO')) {
-        my $url = data_url(get_var('AGAMA_AUTO'));
-        $params .= " agama.auto=" . $url;
-        set_var('AGAMA_AUTO', $url);
-    }
     return split_lines($params);
 }
 
@@ -340,7 +335,7 @@ sub run {
     }
 
     # format DASD before installation by default
-    format_dasd if (check_var('FORMAT_DASD', 'pre_install'));
+    format_dasd if (check_var('FORMAT_DASD', 'pre_install') && !get_var('AGAMA_AUTO'));
     create_encrypted_part_dasd if get_var('ENCRYPT_ACTIVATE_EXISTING');
 
     select_console("installation", timeout => 180);

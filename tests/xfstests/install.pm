@@ -24,6 +24,7 @@ use repo_tools 'add_qa_head_repo';
 use version_utils qw(is_sle is_leap is_tumbleweed is_sle_micro is_transactional);
 use File::Basename;
 use transactional;
+use Utils::Architectures 'is_ppc64le';
 
 my $STATUS_LOG = '/opt/status.log';
 my $VERSION_LOG = '/opt/version.log';
@@ -33,6 +34,10 @@ sub install_xfstests_from_repo {
     if (is_sle) {
         zypper_call('rr qa-head');
         add_qa_head_repo(priority => 100);
+        if (is_sle('16+')) {
+            my $dep_url = get_var('DEPENDENCY_REPO', 'http://download.suse.de/ibs/home:/yosun:/branches:/SUSE:/Factory:/Head/standard/');
+            zypper_ar($dep_url, name => 'dependency-repo');
+        }
     }
     elsif (is_tumbleweed) {
         zypper_ar('http://download.opensuse.org/tumbleweed/repo/oss/', name => 'repo-oss');
@@ -51,7 +56,21 @@ sub install_xfstests_from_repo {
         script_run('id fsgqa2 &> /dev/null || useradd -d /home/fsgqa2 -k /etc/skel -ms /bin/bash -U fsgqa2');
         script_run('getent group sys >/dev/null || groupadd -r sys');
         script_run('id daemon &> /dev/null || useradd daemon -g sys');
-        trup_call('pkg install xfstests');
+        if (is_ppc64le) {
+            script_run_interactive(
+                "transactional-update -n pkg install xfstests",
+                [
+                    {
+                        prompt => qr/Choose from above solutions by number or cancel/m,
+                        key => '2',
+                    },
+                ],
+                100
+            );
+        }
+        else {
+            trup_call('pkg install xfstests');
+        }
         unless (is_sle_micro('>=6.0')) {
             trup_call('--continue pkg install fio');
         }

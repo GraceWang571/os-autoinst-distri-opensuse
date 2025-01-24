@@ -144,7 +144,6 @@ sub run {
     }
     set_var('SLES4SAP_OS_IMAGE_NAME', $os_image_name);
 
-    set_var_output('USE_SAPCONF', 'true');
     # This is the path where community.sles-for-sap repo
     # has been cloned.
     # Not all the conf.yaml used by this file needs it but
@@ -170,15 +169,15 @@ sub run {
         $playbook_configs{ptf_account} = get_required_var('PTF_ACCOUNT');
     }
     if ($playbook_configs{fencing} eq 'native' and is_azure) {
-        $playbook_configs{fence_type} = get_var('AZURE_FENCE_AGENT_CONFIGURATION', 'msi');
+        $playbook_configs{fence_type} = get_required_var('AZURE_FENCE_AGENT_CONFIGURATION');
         if ($playbook_configs{fence_type} eq 'spn') {
             $playbook_configs{spn_application_id} = get_var('AZURE_SPN_APPLICATION_ID', get_required_var('_SECRET_AZURE_SPN_APPLICATION_ID'));
             $playbook_configs{spn_application_password} = get_var('AZURE_SPN_APP_PASSWORD', get_required_var('_SECRET_AZURE_SPN_APP_PASSWORD'));
         }
     }
 
-    $playbook_configs{scc_code} = get_required_var('SCC_REGCODE_SLES4SAP') if ($os_image_name =~ 'byos');
-    my @addons = grep { defined $_ && $_ } split(/,/, get_var('SCC_ADDONS'));
+    $playbook_configs{scc_code} = get_required_var('SCC_REGCODE_SLES4SAP') if ($os_image_name =~ /byos/i);
+    my @addons = split(/,/, get_var('SCC_ADDONS', ''));
     # This implementation has a known limitation
     # if SCC_ADDONS has two or more elements (like "ltss,ltss_es")
     # only the last one will be added to the playbook argument.
@@ -188,9 +187,8 @@ sub run {
         # it simplify version calculation.
         $name = get_addon_fullname($addon) if ($addon =~ 'ltss');
         if ($name) {
-            record_info($name, "Register '$name' with code '$ADDONS_REGCODE{$name}'");
             $playbook_configs{ltss} = join(',', join('/', $name, scc_version(), 'x86_64'), $ADDONS_REGCODE{$name});
-            $playbook_configs{registration} = 'suseconnect' if ($os_image_name =~ 'byos');
+            $playbook_configs{registration} = 'suseconnect' if ($os_image_name =~ /byos/i && $reg_mode !~ 'noreg');
         }
     }
     $ansible_playbooks = create_playbook_section_list(%playbook_configs);
@@ -210,7 +208,8 @@ sub run {
         verbose => 1,
         timeout => 3600,
         retries => 2,
-        error_string => 'An internal execution error occurred. Please retry later');
+        error_string => 'An internal execution error occurred. Please retry later',
+        destroy_terraform => 1);
     die 'Terraform deployment FAILED. Check "qesap*" logs for details.' if ($ret[0]);
 
     $provider->terraform_applied(1);
@@ -226,7 +225,7 @@ sub run {
         # We expect hostnames reported by terraform to match the actual hostnames in Azure and GCE
         die "Expected hostname $expected_hostname is different than actual hostname [$real_hostname]"
           if ((is_azure() || is_gce()) && ($expected_hostname ne $real_hostname));
-        if (get_var('FENCING_MECHANISM') eq 'native' && get_var('PUBLIC_CLOUD_PROVIDER') eq 'AZURE' && !check_var('AZURE_FENCE_AGENT_CONFIGURATION', 'spn')) {
+        if (get_var('FENCING_MECHANISM') eq 'native' && is_azure() && check_var('AZURE_FENCE_AGENT_CONFIGURATION', 'msi')) {
             qesap_az_setup_native_fencing_permissions(
                 vm_name => $instance->instance_id,
                 resource_group => qesap_az_get_resource_group());

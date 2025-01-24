@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright 2021-2024 SUSE LLC
+# Copyright 2021-2025 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Summary: Test rootless mode on podman.
@@ -21,13 +21,11 @@ use serial_terminal 'select_serial_terminal';
 use utils;
 use containers::common;
 use containers::container_images;
-use containers::utils qw(get_podman_version);
 use version_utils qw(is_sle is_leap is_jeos is_transactional package_version_cmp is_tumbleweed);
 use Utils::Architectures;
 use Utils::Logging 'save_and_upload_log';
 
 my $bsc1200623 = 0;    # to prevent printing the soft-failure more than once
-my $podman_version;
 
 sub run {
     my ($self) = @_;
@@ -36,13 +34,10 @@ sub run {
 
     my $podman = $self->containers_factory('podman');
 
-    $podman_version = get_podman_version();
     # add testuser to systemd-journal group to allow non-root
     # user to access container logs via journald event driver
     # bsc#1207673, bsc#1218023
-    if (is_leap("<16.0") || is_sle("<16")) {
-        assert_script_run "usermod -a -G systemd-journal $testapi::username";
-    }
+    assert_script_run("usermod -aG systemd-journal $testapi::username") if (is_leap("<16") || is_sle("<16"));
 
     if (get_var('TDUP')) {
         my $cont_storage = '/etc/containers/storage.conf';
@@ -60,8 +55,7 @@ sub run {
         switch_cgroup_version($self, 2);
         select_serial_terminal;
 
-        validate_script_output 'podman info', sub { /cgroupVersion: v2/ };
-        validate_script_output "id $testapi::username", sub { /systemd-journal/ };
+        validate_script_output('podman info', sub { /cgroupVersion: v2/ }, fail_message => "podman not operating in cgroup v2");
     }
 
     # Check for bsc#1192051
@@ -106,7 +100,7 @@ sub run {
     if ($storage ne 'overlay') {
         die "Unexpected storage driver -> $storage";
     }
-    $podman->info();
+    record_info("podman info", script_output("podman info"));
 
     test_container_image(image => $image, runtime => $podman);
     build_and_run_image(base => $image, runtime => $podman);
@@ -151,29 +145,9 @@ sub verify_userid_on_container {
     # Remove once the softfail removed. it is just checks the user's mapped uid
     validate_script_output "podman exec -it $cid cat /proc/self/uid_map", sub { /1000/ };
     # Check for bsc#1182428
-    # podman 2.1.1 with keep-id option list unexpected capabilities
-    # podman of the same version can still show the nsenter original issue
-    my $buggy_podman = (package_version_cmp($podman_version, '2.1.1') == 0);
-
-    if ($buggy_podman && (is_aarch64 || is_s390x)) {
-        my $output = script_output("podman top $cid user huser 2>&1", proceed_on_failure => 1);
-        if ($output =~ "error executing .*nsenter.*executable file not found") {
-            record_soft_failure "bsc#1182428 - Issue with nsenter from podman-top";
-        }
-    } else {
-        my $exp_user = $testapi::username;
-        validate_script_output "podman top $cid user huser", sub { /$exp_user\s+$exp_user/ };
-        my $output = script_output "podman top $cid capeff";
-
-        if ($output !~ /none/) {
-            if ($buggy_podman) {
-                record_soft_failure "bsc#1182428 - Issue with nsenter from podman-top";
-            } else {
-                die "Test does not expect to list any container capabilities";
-            }
-        }
-    }
-
+    my $exp_user = $testapi::username;
+    validate_script_output "podman top $cid user huser", sub { /$exp_user\s+$exp_user/ };
+    validate_script_output("podman top $cid capeff", sub { /none/ }, fail_message => "Container should not have any capabilities");
 
     ## Check if uid change within the container works as desired
     # Note: If this part with 'zypper install' becomes cumbersome we could switch to an image, which already includes sudo and useradd

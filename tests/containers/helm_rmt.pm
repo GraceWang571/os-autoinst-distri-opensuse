@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright 2022-2023 SUSE LLC
+# Copyright 2022-2025 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 #
 # Summary: Test deploy a helm chart in a k3s
@@ -61,7 +61,7 @@ sub run {
 
 sub post_fail_hook {
     my ($self) = @_;
-    assert_script_run('tar -capf /tmp/containers-logs.tar.xz /var/log/pods $(find /var/lib/rancher/k3s -name \*.log -name \*.toml)');
+    script_run('tar -capf /tmp/containers-logs.tar.xz /var/log/pods $(find /var/lib/rancher/k3s -name \*.log -name \*.toml)');
     upload_logs("/tmp/containers-logs.tar.xz");
     script_run("helm delete rmt");
     uninstall_k3s() if $self->{is_k3s};

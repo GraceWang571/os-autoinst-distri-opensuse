@@ -115,7 +115,7 @@ sub run_cmd {
     delete($args{timeout});
     delete($args{runas});
 
-    $self->{my_instance}->wait_for_ssh(timeout => $timeout, scan_ssh_host_key => 1);
+    $self->{my_instance}->wait_for_ssh(timeout => $timeout);
     my $out = $self->{my_instance}->run_ssh_command(cmd => "sudo $cmd", timeout => $timeout, %args);
     record_info("$title output - $self->{my_instance}->{instance_id}", $out) unless ($timeout == 0 or $args{quiet} or $args{rc_only});
     return $out;
@@ -909,13 +909,6 @@ sub delete_network_peering {
 
 =item B<ptf_container> - name of the container for PTF files (optional)
 
-=item B<ltss> - name and reg_code for LTSS extension to register.
-                This argument is a two element comma separated list string.
-                Like: 'SLES-LTSS-Extended-Security/12.5/x86_64,123456789'
-                First string before the comma has to be a valid SCC extension name, later used by Ansible
-                as argument for SUSEConnect or registercloudguest argument.
-                Second string has to be valid registration code for the particular LTSS extension.
-
 =back
 =cut
 
@@ -941,13 +934,7 @@ sub create_playbook_section_list {
         my @reg_args = ('registration.yaml');
         push @reg_args, "-e reg_code=$args{scc_code} -e email_address=''";
         push @reg_args, '-e use_suseconnect=true' if ($args{registration} eq 'suseconnect');
-        if ($args{ltss}) {
-            my @ltss_args = split(/,/, $args{ltss});
-            die "Missing reg_code for '$ltss_args[0]'" if scalar @ltss_args != 2;
-            push @reg_args, "-e sles_modules='[{" .
-              "\"key\":\"$ltss_args[0]\"," .
-              "\"value\":\"$ltss_args[1]\"}]'";
-        }
+        push @reg_args, qesap_ansible_reg_module(reg => $args{ltss}) if ($args{ltss});
         # Add registration module as first element
         push @playbook_list, join(' ', @reg_args);
 
@@ -981,7 +968,7 @@ sub create_playbook_section_list {
 
     # SLES4SAP/HA related playbooks
     if ($args{ha_enabled}) {
-        push @playbook_list, 'pre-cluster.yaml', 'sap-hana-preconfigure.yaml -e use_sapconf=' . get_required_var('USE_SAPCONF');
+        push @playbook_list, 'pre-cluster.yaml', 'sap-hana-preconfigure.yaml -e use_sapconf=' . get_var('USE_SAPCONF', 'false');
         push @playbook_list, 'cluster_sbd_prep.yaml' if ($args{fencing} eq 'sbd');
         push @playbook_list, qw(
           sap-hana-storage.yaml
@@ -1068,6 +1055,7 @@ sub create_hana_vars_section {
         $hana_vars{sap_hana_install_sid} = get_required_var('INSTANCE_SID');
         $hana_vars{sap_hana_install_instance_number} = get_required_var('INSTANCE_ID');
         $hana_vars{sap_domain} = get_var('SAP_DOMAIN', 'qesap.example.com');
+        $hana_vars{use_sap_hana_sr_angi} = get_var('USE_SAP_HANA_SR_ANGI', 'false');
         $hana_vars{primary_site} = $hana_sites[0];
         $hana_vars{secondary_site} = $hana_sites[1];
         set_var('SAP_SIDADM', lc(get_var('INSTANCE_SID') . 'adm'));

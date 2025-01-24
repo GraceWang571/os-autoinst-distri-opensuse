@@ -69,6 +69,8 @@ our @EXPORT = qw(
   qesap_ansible_script_output_file
   qesap_ansible_script_output
   qesap_ansible_fetch_file
+  qesap_ansible_reg_module
+  qesap_ansible_error_detection
   qesap_create_ansible_section
   qesap_remote_hana_public_ips
   qesap_wait_for_ssh
@@ -91,7 +93,6 @@ our @EXPORT = qw(
   qesap_import_instances
   qesap_file_find_string
   qesap_is_job_finished
-  qesap_az_get_vnet
   qesap_az_get_resource_group
   qesap_az_calculate_address_range
   qesap_az_vnet_peering
@@ -105,7 +106,6 @@ our @EXPORT = qw(
   qesap_az_list_container_files
   qesap_az_diagnostic_log
   qesap_terrafom_ansible_deploy_retry
-  qesap_ansible_error_detection
   qesap_test_postfail
 );
 
@@ -581,6 +581,8 @@ sub qesap_execute {
 
 =item B<ERROR_STRING> - error string to look for
 
+=item B<destroy_terraform> - destroy terraform before retrying terraform apply
+
 =back
 =cut
 
@@ -601,6 +603,17 @@ sub qesap_execute_conditional_retry {
         if ($ret[0]) {
             if (qesap_file_find_string(file => $ret[1], search_string => $args{error_string})) {
                 record_info('DETECTED ' . uc($args{cmd}) . ' ERROR', $args{error_string});
+
+                # Executing terraform destroy before retrying terraform apply
+                if ($args{destroy_terraform}) {
+                    qesap_execute(
+                        cmd => 'terraform',
+                        cmd_options => '-d',
+                        logname => "qesap_exec_terraform_destroy_before_retry$args{retries}.log.txt",
+                        verbose => 1,
+                        timeout => 1200);
+                }
+
                 @ret = qesap_execute(cmd => $args{cmd},
                     logname => 'qesap_' . $args{cmd} . '_retry_' . $args{retries} . '.log.txt',
                     timeout => $args{timeout});
@@ -1122,6 +1135,37 @@ sub qesap_ansible_fetch_file {
     return $args{out_path} . $args{file};
 }
 
+=head3 qesap_ansible_reg_module
+
+    Compose the ansible-playbook argument for the registration.yaml playbook,
+    about an additional module registration
+
+    -e sles_modules='[{"key":"SLES-LTSS-Extended-Security/12.5/x86_64","value":"*******"}]'
+
+    Known limitation is that registration.yaml supports multiple modules to be registered,
+    this code only supports one.
+
+=over
+=item B<reg> - name and reg_code for the additional extension to register.
+                This argument is a two element comma separated list string.
+                Like: 'SLES-LTSS-Extended-Security/12.5/x86_64,123456789'
+                First string before the comma has to be a valid SCC extension name, later used by Ansible
+                as argument for SUSEConnect or registercloudguest argument.
+                Second string has to be valid registration code for the particular extension.
+
+=back
+=cut
+
+sub qesap_ansible_reg_module {
+    my (%args) = @_;
+    croak 'Missing mandatory "reg" argument' unless $args{reg};
+    my @reg_args = split(/,/, $args{reg});
+    die "Missing reg_code for '$reg_args[0]'" if (@reg_args != 2);
+    return "-e sles_modules='[{" .
+      "\"key\":\"$reg_args[0]\"," .
+      "\"value\":\"$reg_args[1]\"}]'";
+}
+
 =head3 qesap_create_aws_credentials
 
     Creates a AWS credentials file as required by QE-SAP Terraform deployment code.
@@ -1616,12 +1660,19 @@ sub qesap_aws_filter_query {
 
     Return the Transient Gateway ID of the IBS Mirror
 
+=over
+
+=item B<MIRROR_TAG> - Value of Project tag applied to the IBS Mirror
+
+=back
 =cut
 
 sub qesap_aws_get_mirror_tg {
+    my (%args) = @_;
+    croak "Missing mandatory $_ argument" unless $args{mirror_tag};
     return qesap_aws_filter_query(
         cmd => 'describe-transit-gateways',
-        filter => '"Name=tag-key,Values=Project" "Name=tag-value,Values=IBS Mirror"',
+        filter => '"Name=tag-key,Values=Project" "Name=tag-value,Values=' . $args{mirror_tag} . '"',
         query => '"TransitGateways[].TransitGatewayId"'
     );
 }
@@ -1685,14 +1736,16 @@ sub qesap_aws_get_routing {
 
 =item B<VPC_ID> - VPC ID of resource to be attached (SUT HANA cluster)
 
+=item B<MIRROR_TAG> - Value of Project tag applied to the IBS Mirror
+
 =back
 =cut
 
 sub qesap_aws_vnet_peering {
     my (%args) = @_;
-    foreach (qw(target_ip vpc_id)) { croak "Missing mandatory $_ argument" unless $args{$_}; }
+    foreach (qw(target_ip vpc_id mirror_tag)) { croak "Missing mandatory $_ argument" unless $args{$_}; }
 
-    my $trans_gw_id = qesap_aws_get_mirror_tg();
+    my $trans_gw_id = qesap_aws_get_mirror_tg(mirror_tag => $args{mirror_tag});
     unless ($trans_gw_id) {
         record_info('AWS PEERING', 'Empty trans_gw_id');
         return 0;
@@ -1854,29 +1907,6 @@ sub qesap_is_job_finished {
     return ($job_state ne 'running');
 }
 
-=head3 qesap_az_get_vnet
-
-Return the output of az network vnet list
-
-=over
-
-=item B<RESOURCE_GROUP> - resource group name to query
-
-=back
-=cut
-
-sub qesap_az_get_vnet {
-    my ($resource_group) = @_;
-    croak 'Missing mandatory resource_group argument' unless $resource_group;
-
-    my $cmd = join(' ', 'az network',
-        'vnet list',
-        '-g', $resource_group,
-        '--query "[0].name"',
-        '-o tsv');
-    return script_output($cmd, 180);
-}
-
 =head3 qesap_az_get_resource_group
 
 Query and return the resource group used
@@ -1951,8 +1981,8 @@ sub qesap_az_calculate_address_range {
 sub qesap_az_vnet_peering {
     my (%args) = @_;
     foreach (qw(source_group target_group)) { croak "Missing mandatory $_ argument" unless $args{$_}; }
-    my $source_vnet = qesap_az_get_vnet($args{source_group});
-    my $target_vnet = qesap_az_get_vnet($args{target_group});
+    my $source_vnet = az_network_vnet_get(resource_group => $args{source_group}, query => "[0].name");
+    my $target_vnet = az_network_vnet_get(resource_group => $args{target_group}, query => "[0].name");
     $args{timeout} //= bmwqemu::scale_timeout(300);
 
     my $vnet_show_cmd = 'az network vnet show --query id --output tsv';
@@ -2055,7 +2085,7 @@ sub qesap_az_vnet_peering_delete {
     croak 'Missing mandatory target_group argument' unless $args{target_group};
     $args{timeout} //= bmwqemu::scale_timeout(300);
 
-    my $target_vnet = qesap_az_get_vnet($args{target_group});
+    my $target_vnet = az_network_vnet_get(resource_group => $args{target_group}, query => "[0].name");
 
     my $peering_name = qesap_az_get_peering_name(resource_group => $args{target_group});
     if (!$peering_name) {
@@ -2068,7 +2098,7 @@ sub qesap_az_vnet_peering_delete {
     my $source_ret = 0;
     record_info('Destroying job_resources->IBSM peering');
     if ($args{source_group}) {
-        my $source_vnet = qesap_az_get_vnet($args{source_group});
+        my $source_vnet = az_network_vnet_get(resource_group => $args{source_group}, query => "[0].name");
         $source_ret = qesap_az_simple_peering_delete(
             rg => $args{source_group},
             vnet_name => $source_vnet,
@@ -2140,7 +2170,7 @@ sub qesap_az_get_peering_name {
     croak 'Missing mandatory target_group argument' unless $args{resource_group};
 
     my $job_id = get_current_job_id();
-    my $cmd = qesap_az_peering_list_cmd(resource_group => $args{resource_group}, vnet => qesap_az_get_vnet($args{resource_group}));
+    my $cmd = qesap_az_peering_list_cmd(resource_group => $args{resource_group}, vnet => az_network_vnet_get(resource_group => $args{resource_group}, query => "[0].name"));
     $cmd .= ' | grep ' . $job_id;
     return script_output($cmd, proceed_on_failure => 1);
 }
@@ -2235,11 +2265,12 @@ sub qesap_az_setup_native_fencing_permissions {
 
     # Assign role
     my $subscription_id = script_output('az account show --query "id" -o tsv');
+    my $role_id = script_output('az role definition list --name "Linux Fence Agent Role" --query "[].id" --output tsv');
     my $az_cmd = join(' ', 'az role assignment',
         'create --only-show-errors',
         "--assignee-object-id $vm_id",
         '--assignee-principal-type ServicePrincipal',
-        "--role 'Virtual Machine Contributor'",
+        "--role '$role_id'",
         "--scope '/subscriptions/$subscription_id/resourceGroups/$args{resource_group}'");
     assert_script_run($az_cmd);
 }
