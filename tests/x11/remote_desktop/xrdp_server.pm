@@ -93,6 +93,7 @@ sub run {
         send_key "ret";
         assert_screen "multiple-logins-notsupport";
 
+        click_lastmatch if check_screen('new-multiple-logins-warning', 10);
         # Force restart on gdm to check if the active session number is correct
         assert_and_click "status-bar";
         assert_and_click "power-button";
