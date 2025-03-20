@@ -68,7 +68,7 @@ sub run {
     my $wtmp_output = script_output('last -F');
     if ($utmp_output !~ m/2038/sx || $wtmp_output !~ m/2038/sx) {
         if (is_sle('<16') || is_leap('<16.0') || is_sle_micro || is_leap_micro) {
-            record_soft_failure('bsc#1188626 SLE <= 15 not Y2038 compatible');
+            record_info("bsc#1188626", "SLE <= 15 not Y2038 compatible");
         }
         else {
             die('Not Y2038 compatible');
@@ -83,7 +83,7 @@ sub run {
     script_retry('journalctl -u chronyd | grep -e "System clock wrong" -e "Received KoD RATE"', delay => 60, retry => 3, die => 0);
     assert_script_run('chronyc makestep');
     unless (script_retry('date +"%Y-%m-%d" | grep -v 2038', delay => 5, retry => 5, die => 0) == 0) {
-        record_soft_failure('poo#127343, Time sync with NTP server failed');
+        record_info("poo#127343", "Time sync with NTP server failed");
         systemctl('stop chronyd.service');
         # Set time stamp when we start the test
         assert_script_run("timedatectl set-time \"$date\"");

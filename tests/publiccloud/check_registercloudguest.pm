@@ -20,6 +20,8 @@ use utils;
 use publiccloud::utils;
 use publiccloud::ssh_interactive 'select_host_console';
 
+our $run_count = 0;
+
 my $path = is_sle('=15-SP2') ? '/usr/sbin/' : '';    # 15-SP2 is the oldest version that needs fullpaths
 my $regcode_param = (is_byos()) ? "-r " . get_required_var('SCC_REGCODE') : '';
 
@@ -27,6 +29,8 @@ sub run {
     my ($self, $args) = @_;
     my ($provider, $instance);
     select_host_console();
+
+    $run_count++;
 
     if (get_var('PUBLIC_CLOUD_QAM', 0)) {
         $instance = $self->{my_instance} = $args->{my_instance};
@@ -168,8 +172,27 @@ sub test_container_runtimes {
     $instance->ssh_assert_script_run("sudo systemctl stop docker.service");
 
     record_info('Test podman');
-    $instance->ssh_assert_script_run("sudo zypper install -y podman");
-    $instance->ssh_script_retry("podman pull $image", retry => 3, delay => 60, timeout => 600);
+    # cloud-regionsrv-client creates registries.conf file if it is not pre-installed from the package
+    # in such a case the umask of the file is wrong
+    # registercloudguest should not change the permissions of already existing file
+    if ($instance->ssh_script_output(cmd => 'sudo stat -c "%a" /etc/containers/registries.conf') != 644) {
+        record_soft_failure('bsc#1233333');
+        if ($instance->ssh_script_run('sudo rpm -q libcontainers-common')) {
+            record_info('permissions #1', 'permissions when libcontainers-common is missing');
+            $instance->ssh_script_run('sudo stat /etc/containers/registries.conf');
+            $instance->ssh_script_run('sudo rm -rf /etc/containers/registries.conf');
+            $instance->ssh_assert_script_run("sudo zypper -n install libcontainers-common");
+            record_info('permissions #2', 'The previous registries.conf has been removed, then libcontainers-common was installed');
+            $instance->ssh_script_run('sudo stat /etc/containers/registries.conf');
+            cleanup_instance($instance);
+            new_registration($instance);
+            record_info('permissions #3', 'The libcontainers-common is present and then the image was re-registered');
+            $instance->ssh_script_run('sudo stat /etc/containers/registries.conf');
+        }
+        $instance->ssh_script_run('sudo chmod 644 /etc/containers/registries.conf');
+    }
+    $instance->ssh_assert_script_run("sudo zypper install -y podman", timeout => 240);
+    $instance->ssh_script_retry("podman --debug pull $image", retry => 3, delay => 60, timeout => 600);
     return 0;
 }
 
@@ -191,7 +214,8 @@ sub force_new_registration {
 sub post_fail_hook {
     my ($self) = @_;
     if (exists($self->{my_instance})) {
-        $self->{my_instance}->upload_log('/var/log/cloudregister', log_name => $autotest::current_test->{name} . '-cloudregister.log');
+        $self->{my_instance}->ssh_script_run("sudo chmod a+r /var/log/cloudregister", timeout => 0, quiet => 1);
+        $self->{my_instance}->upload_log('/var/log/cloudregister', log_name => $autotest::current_test->{name} . '-cloudregister.log.txt');
     }
     if (is_azure()) {
         record_info('azuremetadata', $self->{my_instance}->run_ssh_command(cmd => "sudo /usr/bin/azuremetadata --api latest --subscriptionId --billingTag --attestedData --signature --xml"));
@@ -201,6 +225,7 @@ sub post_fail_hook {
 }
 
 sub test_flags {
+    return {fatal => 1, publiccloud_multi_module => 0} if $run_count > 1;
     return {fatal => 0, publiccloud_multi_module => 1};
 }
 

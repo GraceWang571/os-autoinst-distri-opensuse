@@ -148,7 +148,9 @@ sub _prepare_ssh_cmd {
         $cmd = "\$'$cmd'";
     }
 
-    my $ssh_cmd = sprintf('ssh -E /var/tmp/ssh_sut.log %s "%s@%s" -- %s', $args{ssh_opts}, $args{username}, $self->public_ip, $cmd);
+    my $log = '/var/tmp/ssh_sut.log';
+    my $ssh_cmd = sprintf('ssh %s %s "%s@%s" -- %s', (($args{ssh_opts} !~ m{-E\s+$log}) ? "-E $log" : ''), $args{ssh_opts}, $args{username}, $self->public_ip, $cmd);
+
     return $ssh_cmd;
 }
 
@@ -261,10 +263,9 @@ If the file doesn't exists on the instance, B<no> error is thrown.
 
 sub upload_log {
     my ($self, $remote_file, %args) = @_;
-
-    my $tmpdir = script_output('mktemp -d');
+    my $tmpdir = script_output_retry('mktemp -d');
     my $dest = $tmpdir . '/' . basename($remote_file);
-    my $ret = $self->scp('remote:' . $remote_file, $dest);
+    my $ret = $self->scp('remote:' . $remote_file, $dest, %args);
     upload_logs($dest, %args) if (defined($ret) && $ret == 0);
     assert_script_run("test -d '$tmpdir' && rm -rf '$tmpdir'");
 }
@@ -405,6 +406,15 @@ sub wait_for_ssh {
         $exit_code = script_run('nc -vz -w 1 ' . $self->{public_ip} . ' 22', quiet => 1);
         last if (isok($exit_code) and not $args{wait_stop});    # ssh port open ok
         last if (not isok($exit_code) and $args{wait_stop});    # ssh port closed ok
+
+        # skip SLES4SAP as incompatible with get_public_ip
+        if (($duration >= $args{timeout} - 30) and (!get_var('PUBLIC_CLOUD_SLES4SAP'))) {
+            my $public_ip_from_provider = $self->provider->get_public_ip();
+            if ($args{public_ip} eq $public_ip_from_provider) {
+                record_info('IP CHANGED', printf("The address we know is %s but provider returns %s", $args{public_ip}, $public_ip_from_provider));
+            }
+        }
+
         sleep $delay;
     }    # endloop
 
@@ -463,7 +473,11 @@ sub wait_for_ssh {
         }
 
         # Finally make sure that SSH works
-        $self->ssh_script_retry(cmd => "true", username => $args{username}, timeout => 90, retry => 5, delay => 3);
+        while (($duration = time() - $start_time) < $args{timeout}) {
+            $exit_code = $self->ssh_script_run(cmd => "true", username => $args{username}, timeout => $args{timeout} - $duration);
+            last if isok($exit_code);
+            sleep $delay;
+        }
 
         # Log upload
         if (!get_var('PUBLIC_CLOUD_SLES4SAP') and $args{logs}) {
@@ -614,15 +628,25 @@ Test the network speed.
 
 sub network_speed_test() {
     my ($self, %args) = @_;
+    my ($cmd, $ret);
+
     # Curl stats output format
     my $write_out
       = 'time_namelookup:\t%{time_namelookup} s\ntime_connect:\t\t%{time_connect} s\ntime_appconnect:\t%{time_appconnect} s\ntime_pretransfer:\t%{time_pretransfer} s\ntime_redirect:\t\t%{time_redirect} s\ntime_starttransfer:\t%{time_starttransfer} s\ntime_total:\t\t%{time_total} s\n';
     # PC RMT server domain name
     my $rmt_host = "smt-" . lc(get_required_var('PUBLIC_CLOUD_PROVIDER')) . ".susecloud.net";
-    my $rmt = $self->run_ssh_command(cmd => "grep \"$rmt_host\" /etc/hosts", proceed_on_failure => 1);
-    record_info("rmt_host", $rmt);
-    record_info("ping 1.1.1.1", $self->run_ssh_command(cmd => "ping -c30 1.1.1.1", proceed_on_failure => 1, timeout => 600));
-    record_info("curl $rmt_host", $self->run_ssh_command(cmd => "curl -w '$write_out' -o /dev/null -v https://$rmt_host/", proceed_on_failure => 1));
+
+    $cmd = "grep \"$rmt_host\" /etc/hosts";
+    $ret = $self->run_ssh_command(cmd => $cmd, proceed_on_failure => 1);
+    record_info("RMT_HOST", printf('$ %s\n%s', $cmd, $ret));
+
+    $cmd = "ping -c3 1.1.1.1";
+    $ret = $self->run_ssh_command(cmd => $cmd, proceed_on_failure => 1);
+    record_info("PING", printf('$ %s\n%s', $cmd, $ret));
+
+    $cmd = "curl -w '$write_out' -o /dev/null -v https://$rmt_host/";
+    $ret = $self->run_ssh_command(cmd => $cmd, proceed_on_failure => 1);
+    record_info("CURL", printf('$ %s\n%s', $cmd, $ret));
 }
 
 sub cleanup_cloudinit() {
@@ -848,5 +872,11 @@ sub do_systemd_analyze_time {
     return @ret;
 }
 
+sub upload_supportconfig_log {
+    my ($self, %args) = @_;
+    $self->ssh_script_run(cmd => 'sudo supportconfig -R /var/tmp -B supportconfig -x AUDIT', timeout => 7200);
+    $self->ssh_script_run(cmd => 'sudo chmod 755 /var/tmp/scc_supportconfig.txz', timeout => 3600);
+    $self->upload_log('/var/tmp/scc_supportconfig.txz', failok => 1, timeout => 600);
+}
 
 1;

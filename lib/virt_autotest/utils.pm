@@ -95,6 +95,7 @@ our @EXPORT = qw(
   get_guest_regcode
   execute_over_ssh
   reboot_virtual_machine
+  reconnect_console_if_not_good
 );
 
 my %log_cursors;
@@ -185,7 +186,7 @@ sub is_hyperv_virtualization {
 
 # Return 1 if it is SLES MU virt test, otherwise return 0
 sub is_sles_mu_virt_test {
-    return is_sle && get_var('REGRESSION') =~ /xen|kvm|qemu|hyperv|vmware/ && !get_var("VIRT_AUTOTEST");
+    return is_sle && get_var('REGRESSION', '') =~ /xen|kvm|qemu|hyperv|vmware/ && !get_var("VIRT_AUTOTEST");
 }
 
 #return 1 if it is a fv guest judging by name
@@ -1433,6 +1434,21 @@ sub reboot_virtual_machine {
         script_run("virsh start $args{domain}");
         script_retry($test_ssh_open, delay => 1, retry => 30, die => 1);
     }
+}
+
+# Test console connection bi-directionally and reconnect if not good.
+# This is useful for long time no use consoles.
+sub reconnect_console_if_not_good {
+    my $_console = shift;
+    $_console //= 'root-ssh';
+
+    # Test console connection and reconnect if not good
+    enter_cmd "echo GOOD > /dev/$serialdev";
+    unless (defined(wait_serial 'GOOD', timeout => 30)) {
+        reset_consoles;
+        select_console($_console, await_console => 0);
+    }
+    record_info("Console is good");
 }
 
 1;

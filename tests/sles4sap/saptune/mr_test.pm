@@ -50,9 +50,11 @@ sub setup {
     quit_packagekit;
     # Install saptune
     zypper_call "in saptune";
-    zypper_call "in sapconf";
-    if (systemctl("-q is-active sapconf.service", ignore_failure => 1)) {
-        record_soft_failure("bsc#1190787 - sapconf is not started");
+    unless (is_sle('16+')) {
+        zypper_call "in sapconf";
+        if (systemctl("-q is-active sapconf.service", ignore_failure => 1)) {
+            record_soft_failure("bsc#1190787 - sapconf is not started");
+        }
     }
     # Install mr_test dependencies
     # 'zypper_call "-n in python3-rpm"' returns error message:
@@ -71,16 +73,20 @@ sub setup {
     }
 
     # Remove any configuration set by sapconf
-    assert_script_run "sed -i.bak '/^@/,\$d' /etc/security/limits.conf";
-    script_run "mv /etc/systemd/logind.conf.d/sap.conf{,.bak}" unless check_var('DESKTOP', 'textmode');
-    systemctl '--now disable sapconf';
+    unless (is_sle('16+')) {
+        assert_script_run "sed -i.bak '/^@/,\$d' /etc/security/limits.conf";
+        script_run "mv /etc/systemd/logind.conf.d/sap.conf{,.bak}" unless check_var('DESKTOP', 'textmode');
+        systemctl '--now disable sapconf';
+    }
     assert_script_run 'saptune service enablestart';
     if (is_qemu) {
         # Ignore disk_elevator on VM's
         assert_script_run "sed -ri '/:scripts\\/disk_elevator/s/^/#/' \$(grep -F -rl :scripts/disk_elevator Pattern/)";
         # Skip nr_requests on VM's. Fix bsc#1177888
+        assert_script_run 'sed -i "/:scripts\/nr_requests/s/^/#/" Pattern/SLE16/testpattern_*';
         assert_script_run 'sed -i "/:scripts\/nr_requests/s/^/#/" Pattern/SLE15/testpattern_*';
         # Skip tcp_keepalive on public cloud
+        assert_script_run 'sed -i "/:\/proc\/sys\/net\/ipv4\/tcp_keepalive/s/^/#/" Pattern/SLE16/testpattern_*';
         assert_script_run 'sed -i "/:\/proc\/sys\/net\/ipv4\/tcp_keepalive/s/^/#/" Pattern/SLE15/testpattern_*';
         assert_script_run 'sed -i "/:\/proc\/sys\/net\/ipv4\/tcp_keepalive/s/^/#/" Pattern/SLE12/testpattern_*';
     }

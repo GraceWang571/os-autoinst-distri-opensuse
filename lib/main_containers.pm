@@ -130,6 +130,8 @@ sub load_host_tests_podman {
     load_3rd_party_image_test($run_args) unless is_staging;
     load_rt_workload($run_args) if is_rt;
     load_container_engine_privileged_mode($run_args);
+    # podman artifact needs podman 5.4.0
+    loadtest 'containers/podman_artifact' if is_tumbleweed;
     loadtest 'containers/podman_bci_systemd';
     loadtest 'containers/podman_pods';
     # CNI is the default network backend on SLEM<6 and SLES<15-SP6. It is still available on later products as a dependency for docker.
@@ -141,7 +143,7 @@ sub load_host_tests_podman {
     loadtest 'containers/podman_ipv6' if (is_public_cloud && is_sle('>=15-SP5') && !is_azure);
     loadtest 'containers/podman_netavark' unless (is_staging || is_ppc64le);
     loadtest('containers/skopeo', run_args => $run_args, name => $run_args->{runtime} . "_skopeo") unless (is_sle('<15') || is_sle_micro('<5.5'));
-    loadtest 'containers/podman_quadlet' unless (is_staging || is_sle("<16") || is_sle_micro("<6.1"));
+    loadtest 'containers/podman_quadlet' unless (is_staging || is_leap("<16") || is_sle("<16") || is_sle_micro("<6.1"));
     # https://github.com/containers/podman/issues/5732#issuecomment-610222293
     # exclude rootless podman on public cloud because of cgroups2 special settings
     unless (is_openstack || is_public_cloud) {
@@ -154,6 +156,7 @@ sub load_host_tests_podman {
     load_volume_tests($run_args);
     load_compose_tests($run_args);
     loadtest('containers/seccomp', run_args => $run_args, name => $run_args->{runtime} . "_seccomp") unless is_sle('<15');
+    loadtest('containers/isolation', run_args => $run_args, name => $run_args->{runtime} . "_isolation") unless (is_public_cloud || is_transactional);
 }
 
 sub load_host_tests_docker {
@@ -182,6 +185,10 @@ sub load_host_tests_docker {
         loadtest 'containers/buildx';
         loadtest 'containers/rootless_docker';
     }
+    # Skip this test on docker-stable due to https://bugzilla.opensuse.org/show_bug.cgi?id=1239596
+    unless (is_transactional || is_public_cloud || is_sle('<15-SP4') || check_var("CONTAINERS_DOCKER_FLAVOUR", "stable")) {
+        loadtest('containers/isolation', run_args => $run_args, name => $run_args->{runtime} . "_isolation");
+    }
     loadtest('containers/skopeo', run_args => $run_args, name => $run_args->{runtime} . "_skopeo") unless (is_sle('<15') || is_sle_micro('<5.5'));
     load_buildah_tests($run_args) unless (is_sle('<15') || is_sle_micro || is_microos || is_leap_micro || is_staging);
     load_volume_tests($run_args);
@@ -191,11 +198,6 @@ sub load_host_tests_docker {
     unless (is_generalhw || is_ipmi || is_public_cloud || is_openstack || is_sle_micro || is_microos || is_leap_micro || (is_sle('=12-SP5') && is_aarch64)) {
         loadtest 'containers/validate_btrfs';
     }
-}
-
-sub load_host_tests_multi_runtime {
-    my ($run_args) = @_;
-    loadtest('containers/podman_docker_interop', run_args => $run_args);
 }
 
 sub load_host_tests_containerd_crictl {
@@ -288,9 +290,15 @@ sub load_container_tests {
         return;
     }
 
-    if (get_var('HELM_CONFIG')) {
+    ## Helm chart tests. Add your individual helm chart tests here.
+    if (my $chart = get_var('HELM_CHART')) {
         set_var('K3S_ENABLE_COREDNS', 1);
-        loadtest 'containers/helm_rmt';
+
+        if ($chart eq 'helm' || $chart =~ m/rmt-helm$/) {
+            loadtest 'containers/charts/rmt';
+        } else {
+            die "Unsupported HELM_CHART value";
+        }
         return;
     }
 
@@ -304,12 +312,15 @@ sub load_container_tests {
         return;
     }
 
-    if (get_var('SKOPEO_BATS_SKIP') || get_var('RUNC_BATS_SKIP')) {
+    if (get_var('SKOPEO_BATS_SKIP') || get_var('RUNC_BATS_SKIP') || get_var('NETAVARK_BATS_SKIP')) {
         if (!check_var('SKOPEO_BATS_SKIP', 'all')) {
             loadtest 'containers/skopeo_integration' if (is_tumbleweed || is_microos || is_sle || is_leap || is_sle_micro('>=5.5'));
         }
         if (!check_var('RUNC_BATS_SKIP', 'all')) {
             loadtest 'containers/runc_integration' if (is_tumbleweed || is_sle || is_leap);
+        }
+        if (!check_var('NETAVARK_BATS_SKIP', 'all')) {
+            loadtest 'containers/netavark_integration' if (is_tumbleweed || is_sle('>15-SP4') || is_leap);
         }
         return;
     }
@@ -365,7 +376,7 @@ sub load_container_tests {
             loadtest 'console/enable_mac' if get_var("SECURITY_MAC");
             load_host_tests_podman($run_args) if (/podman/i);
             load_host_tests_docker($run_args) if (/docker/i);
-            load_host_tests_multi_runtime($run_args) if (/multi_runtime/i);
+            loadtest 'containers/multi_runtime' if (/multi_runtime/i);
             load_host_tests_containerd_crictl() if (/containerd_crictl/i);
             load_host_tests_containerd_nerdctl() if (/containerd_nerdctl/i);
             loadtest('containers/kubectl') if (/kubectl/i);

@@ -27,6 +27,7 @@ use File::Copy 'copy';
 use File::Find qw(finddepth);
 use File::Path 'make_path';
 use LWP::Simple 'head';
+use Mojo::Util 'trim';
 use Socket;
 
 use xml_utils;
@@ -35,12 +36,13 @@ our @EXPORT = qw(
   detect_profile_directory
   expand_template
   expand_version
-  expand_agama_variables
   adjust_network_conf
+  expand_agama_secrets
   expand_agama_profile
   expand_variables
   adjust_user_password
   upload_profile
+  generate_json_profile
   inject_registration
   init_autoyast_profile
   test_ayp_url
@@ -136,7 +138,7 @@ sub expand_patterns {
     return [split(/,/, get_var('PATTERNS') =~ s/\bminimal\b/Minimal/r)];
 }
 
-my @unversioned_products = qw(asmm contm lgm tcm wsm);
+my @unversioned_products = qw(asmm contm lgm tcm wsm pcm);
 
 =head2 get_product_version
 
@@ -668,26 +670,6 @@ sub expand_version {
     return $profile;
 }
 
-=head2 expand_agama_variables
-
- expand_agama_variables($profile);
-
- Expand variables from job settings which do not require further processing
-
- $profile is the agama profile.
-
-=cut
-
-sub expand_agama_variables {
-    my ($profile) = @_;
-    my @vars = qw(SCC_REGCODE SCC_REGCODE_SLES4SAP AGAMA_PRODUCT_ID);
-    for my $var (@vars) {
-        next unless my ($value) = get_var($var);
-        $profile =~ s/\{\{$var\}\}/$value/g;
-    }
-    return $profile;
-}
-
 =head2 adjust_network_conf
 
  adjust_network_conf($profile);
@@ -727,6 +709,7 @@ sub expand_variables {
     # Expand other variables
     my @vars = qw(SCC_REGCODE SCC_REGCODE_HA SCC_REGCODE_GEO SCC_REGCODE_HPC
       SCC_REGCODE_LTSS SCC_REGCODE_WE SCC_REGCODE_SLES4SAP SCC_URL ARCH LOADER_TYPE NTP_SERVER_ADDRESS
+      AGAMA_PRODUCT_ID OSDISK SUT_NETDEVICE
       REPO_SLE_MODULE_DEVELOPMENT_TOOLS SCC_REGCODE_LIVE);
     # Push more variables to expand from the job setting
     my @extra_vars = push @vars, split(/,/, get_var('AY_EXPAND_VARS', ''));
@@ -765,6 +748,26 @@ sub adjust_user_password {
     return $profile;
 }
 
+=head2 expand_agama_secrets
+
+ expand_agama_secrets($profile);
+
+ Expand secret variables from job settings which do not require further processing
+
+ $profile is the autoyast profile 'autoinst.xml'.
+
+=cut
+
+sub expand_agama_secrets {
+    my ($profile) = @_;
+    my @vars = qw(_SECRET_RSA_PRIV_KEY _SECRET_RSA_PUB_KEY);
+    for my $var (@vars) {
+        next unless my ($value) = get_var($var);
+        $profile =~ s/\{\{$var\}\}/$value/g;
+    }
+    return $profile;
+}
+
 =head2 expand_agama_profile
 
  expand_agama_profile($profile, $profile_expanded);
@@ -776,10 +779,34 @@ sub adjust_user_password {
 sub expand_agama_profile {
     my ($profile, $profile_expanded) = @_;
     $profile_expanded //= $profile;
-    my $content = expand_agama_variables(get_test_data($profile));
+    my $content = expand_variables(expand_agama_secrets(expand_version(get_test_data($profile))));
     save_tmp_file($profile_expanded, $content);
     my $profile_url = autoinst_url . "/files/$profile_expanded";
     upload_profile(path => $profile_expanded, profile => $content);
+    return $profile_url;
+}
+
+=head2 generate_json_profile
+
+ generate_json_profile();
+
+ Return the URL of generated JSON profile
+
+=cut
+
+sub generate_json_profile {
+    my $profile_name = "generated_profile.json";
+    my $profile_path = get_required_var('CASEDIR') . "/data/" . get_required_var('AGAMA_AUTO');
+
+    my @profile_options = map { " --tla-" . (/true|false/ ? "code" : "str") . " $_" }
+      split(' ', trim(get_var('AGAMA_PROFILE_OPTIONS')));
+    diag "jsonnet @profile_options $profile_path";
+    my $profile_content = `jsonnet @profile_options $profile_path`;
+    record_info("Profile", $profile_content);
+
+    save_tmp_file($profile_name, $profile_content);
+    my $profile_url = autoinst_url("/files/$profile_name");
+    upload_profile(path => $profile_name, profile => $profile_content);
     return $profile_url;
 }
 

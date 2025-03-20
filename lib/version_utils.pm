@@ -52,6 +52,7 @@ use constant {
           is_tunneled
           is_bootloader_grub2
           is_bootloader_sdboot
+          is_bootloader_grub2_bls
           is_plasma6
           requires_role_selection
           check_version
@@ -374,7 +375,7 @@ sub is_leap {
     $version =~ s/:(Core|S)[:\w]*//i;
     $version =~ s/^Jump://i;
 
-    return check_version($query, $version, qr/\d{2,}\.\d/);
+    return check_version($query, $version, qr/\d{2,}(?:\.\d)?/);
 }
 
 =head2 is_opensuse
@@ -403,7 +404,7 @@ sub is_sle {
     return 1 unless $query;
 
     # Version check
-    return check_version($query, $version, qr/\d{2}(?:-sp\d)?/);
+    return check_version($query, $version, qr/\d{2}((?:-sp\d)?|(?:\.\d)?)/);
 }
 
 =head2 is_sled
@@ -563,6 +564,7 @@ sub is_server {
     return 1 if is_sles4sap();
     return 1 if is_sles4migration();
     return 1 if get_var('FLAVOR', '') =~ /^Server/;
+    return 1 if get_var('FLAVOR', '') =~ /^DMS-QEMU/;
     return 1 if is_public_cloud();
     # If unified installer, we need to check SLE_PRODUCT
     return 0 if get_var('FLAVOR', '') !~ /^Installer-|^Online|^Full/;
@@ -842,6 +844,15 @@ sub is_bootloader_sdboot {
     return get_var('BOOTLOADER', 'grub2') eq 'systemd-boot';
 }
 
+=head2 is_bootloader_grub2_bls
+
+Returns true if the SUT uses GRUB2-BLS as bootloader
+=cut
+
+sub is_bootloader_grub2_bls {
+    return get_var('BOOTLOADER', 'grub2') eq 'grub2-bls';
+}
+
 =head2 is_plasma6
 
 Returns true if the SUT uses Plasma 6.
@@ -992,7 +1003,7 @@ Returns true if the distro has SELinux as default MAC
 =cut
 
 sub has_selinux_by_default {
-    return (is_tumbleweed && check_var("VERSION", "Staging:D")) || is_sle_micro('5.4+') || is_leap_micro('5.4+') || is_microos || is_sle('16+');
+    return is_tumbleweed || is_sle_micro('5.4+') || is_leap_micro('5.4+') || is_microos || is_sle('16+') || is_leap('16.0+');
 }
 
 sub has_selinux {

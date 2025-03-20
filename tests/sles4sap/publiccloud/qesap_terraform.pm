@@ -30,7 +30,7 @@ use testapi;
 use publiccloud::ssh_interactive 'select_host_console';
 use publiccloud::instance;
 use publiccloud::instances;
-use publiccloud::utils qw(is_azure is_gce get_ssh_private_key_path);
+use publiccloud::utils qw(is_azure is_gce is_ec2 get_ssh_private_key_path is_byos);
 use sles4sap_publiccloud;
 use qesapdeployment;
 use serial_terminal 'select_serial_terminal';
@@ -62,11 +62,11 @@ sub run {
     my ($self, $run_args) = @_;
     my $provider_setting = get_required_var('PUBLIC_CLOUD_PROVIDER');
 
-    if (is_azure()) {
-        my %maintenance_vars = qesap_az_calculate_address_range(slot => get_required_var('WORKER_ID'));
-        set_var("VNET_ADDRESS_RANGE", $maintenance_vars{vnet_address_range});
-        set_var("SUBNET_ADDRESS_RANGE", $maintenance_vars{subnet_address_range});
-    }
+    # *_ADDRESS_RANGE variables are not necessary needed by all the conf.yaml templates
+    # but calculate them every time is "cheap"
+    my %maintenance_vars = qesap_calculate_address_range(slot => get_required_var('WORKER_ID'));
+    set_var("MAIN_ADDRESS_RANGE", $maintenance_vars{main_address_range});
+    set_var("SUBNET_ADDRESS_RANGE", $maintenance_vars{subnet_address_range});
 
     # Select console on the host (not the PC instance) to reset 'TUNNELED',
     # otherwise select_serial_terminal() will be failed
@@ -143,6 +143,7 @@ sub run {
         $os_image_name = $provider->get_image_id();
     }
     set_var('SLES4SAP_OS_IMAGE_NAME', $os_image_name);
+    set_var_output('SLES4SAP_OS_OWNER', 'aws-marketplace') if is_ec2();
 
     # This is the path where community.sles-for-sap repo
     # has been cloned.
@@ -168,7 +169,7 @@ sub run {
         $playbook_configs{ptf_container} = (split("/", get_required_var('PTF_CONTAINER')))[0];
         $playbook_configs{ptf_account} = get_required_var('PTF_ACCOUNT');
     }
-    if ($playbook_configs{fencing} eq 'native' and is_azure) {
+    if ($playbook_configs{fencing} eq 'native' and is_azure()) {
         $playbook_configs{fence_type} = get_required_var('AZURE_FENCE_AGENT_CONFIGURATION');
         if ($playbook_configs{fence_type} eq 'spn') {
             $playbook_configs{spn_application_id} = get_var('AZURE_SPN_APPLICATION_ID', get_required_var('_SECRET_AZURE_SPN_APPLICATION_ID'));
@@ -176,7 +177,7 @@ sub run {
         }
     }
 
-    $playbook_configs{scc_code} = get_required_var('SCC_REGCODE_SLES4SAP') if ($os_image_name =~ /byos/i);
+    $playbook_configs{scc_code} = get_required_var('SCC_REGCODE_SLES4SAP') if is_byos();
     my @addons = split(/,/, get_var('SCC_ADDONS', ''));
     # This implementation has a known limitation
     # if SCC_ADDONS has two or more elements (like "ltss,ltss_es")
@@ -188,27 +189,33 @@ sub run {
         $name = get_addon_fullname($addon) if ($addon =~ 'ltss');
         if ($name) {
             $playbook_configs{ltss} = join(',', join('/', $name, scc_version(), 'x86_64'), $ADDONS_REGCODE{$name});
-            $playbook_configs{registration} = 'suseconnect' if ($os_image_name =~ /byos/i && $reg_mode !~ 'noreg');
+            $playbook_configs{registration} = 'suseconnect' if (is_byos() && $reg_mode !~ 'noreg');
         }
     }
     $ansible_playbooks = create_playbook_section_list(%playbook_configs);
 
-    my $ansible_hana_vars = create_hana_vars_section($ha_enabled);
-
     # Prepare QESAP deployment
     qesap_prepare_env(provider => $provider_setting);
     qesap_create_ansible_section(ansible_section => 'create', section_content => $ansible_playbooks) if @$ansible_playbooks;
-    qesap_create_ansible_section(ansible_section => 'hana_vars', section_content => $ansible_hana_vars) if %$ansible_hana_vars;
+    qesap_create_ansible_section(
+        ansible_section => 'hana_vars',
+        section_content => create_hana_vars_section()) if $ha_enabled;
 
     # Regenerate config files (This workaround will be replaced with full yaml generator)
     qesap_prepare_env(provider => $provider_setting, only_configure => 1);
+
+    # Retrying terraform more times in case of GCP, to handle concurrent peering attempts
+    my $retries = is_gce() ? 5 : 2;
     my @ret = qesap_execute_conditional_retry(
         cmd => 'terraform',
         logname => 'qesap_exec_terraform.log.txt',
         verbose => 1,
         timeout => 3600,
-        retries => 2,
-        error_string => 'An internal execution error occurred. Please retry later',
+        retries => $retries,
+        error_list => [
+            'An internal execution error occurred. Please retry later',
+            'There is a peering operation in progress'
+        ],
         destroy_terraform => 1);
     die 'Terraform deployment FAILED. Check "qesap*" logs for details.' if ($ret[0]);
 
@@ -217,10 +224,10 @@ sub run {
     foreach my $instance (@$instances) {
         record_info 'Instance', join(' ', 'IP: ', $instance->public_ip, 'Name: ', $instance->instance_id);
         $self->{my_instance} = $instance;
-        $self->set_cli_ssh_opts unless (get_var('MR_TEST', 0));    # Set CLI SSH opts in HanaSR test, not in saptune/mr_test tests
+        $self->set_cli_ssh_opts;
         my $expected_hostname = $instance->{instance_id};
         $instance->wait_for_ssh();
-        # Does not fail for some reason.
+
         my $real_hostname = $instance->ssh_script_output(cmd => 'hostname', username => 'cloudadmin');
         # We expect hostnames reported by terraform to match the actual hostnames in Azure and GCE
         die "Expected hostname $expected_hostname is different than actual hostname [$real_hostname]"
