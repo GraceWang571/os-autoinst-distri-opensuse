@@ -2177,7 +2177,7 @@ sub load_common_x11 {
     }
     elsif (check_var('REGRESSION', 'remote')) {
         if (check_var("REMOTE_DESKTOP_TYPE", "win_client") || check_var('REMOTE_DESKTOP_TYPE', "win_server")) {
-            loadtest "x11/remote_desktop/windows_client_boot";
+            loadtest "wsl/boot_windows";
         }
         else {
             loadtest 'boot/boot_to_desktop';
