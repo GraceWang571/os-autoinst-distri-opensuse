@@ -1,0 +1,15 @@
+global:
+  skipSslValidation: true
+X11:
+   image:
+        repository: registry.suse.de/suse/sle-15-sp6/update/cr/totest/images/suse/kiosk/xorg
+        tag: "latest"
+pulseaudio:
+   image:
+        repository: registry.suse.de/suse/sle-15-sp6/update/cr/totest/images/suse/kiosk/pulseaudio
+        tag: "latest"
+workload:
+   image:
+        repository: registry.suse.de/suse/sle-15-sp6/update/cr/totest/images/suse/kiosk/firefox-esr
+        tag: "latest"
+        url: "https://freesound.org/people/kevp888/sounds/796468/"
