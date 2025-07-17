@@ -16,7 +16,7 @@ use Config::Tiny;
 use Utils::Architectures;
 use utils;
 use version_utils qw(is_sle is_leap is_tumbleweed);
-use x11utils qw(select_user_gnome start_root_shell_in_xterm handle_gnome_activities);
+use x11utils qw(select_user_gnome start_root_shell_in_xterm handle_gnome_activities default_gui_terminal);
 use POSIX 'strftime';
 use mm_network;
 use Utils::Logging qw(export_healthcheck_basic select_log_console export_logs_basic export_logs_desktop record_avc_selinux_alerts);
@@ -599,7 +599,7 @@ sub start_clean_firefox {
     my ($self) = @_;
     mouse_hide(1);
 
-    x11_start_program('xterm');
+    x11_start_program(default_gui_terminal());
     # Clean and Start Firefox
     enter_cmd "killall -9 firefox;rm -rf .moz* .config/iced* .cache/iced* .local/share/gnome-shell/extensions/*; firefox /home >firefox.log 2>&1 &";
     wait_still_screen 3;
