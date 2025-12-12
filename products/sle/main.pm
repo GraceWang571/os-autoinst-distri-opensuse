@@ -690,8 +690,13 @@ elsif (is_public_cloud) {
     load_publiccloud_tests();
 }
 elsif (is_container_test) {
-    load_container_tests();
-    load_helm_chart_tests() if (get_var("HELM_CHART"));
+    if (get_var('CONTAINER_KIOSK_PODMAN')) {
+        loadtest 'microos/disk_boot';
+        loadtest 'containers/podman_kiosk_firefox';
+    } else {
+        load_container_tests();
+        load_helm_chart_tests() if (get_var("HELM_CHART"));
+    }
 }
 elsif (get_var("NFV")) {
     load_kernel_baremetal_tests();
