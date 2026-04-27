@@ -677,6 +677,8 @@ sub close_gui_terminal {
         send_key_until_needlematch(\@tags, 'alt-f4', 5, 10);
         if (match_has_tag('terminal-close-window')) {
             click_lastmatch;
+            check_screen("terminal-remained");
+            click_lastmatch;
             assert_screen 'generic-desktop';
             last;
         }
