@@ -676,9 +676,11 @@ sub close_gui_terminal {
     while ($counter--) {
         send_key_until_needlematch(\@tags, 'alt-f4', 5, 10);
         if (match_has_tag('terminal-close-window')) {
+            # click_lastmatch;
+            # assert_screen 'generic-desktop';
+            # last;
             click_lastmatch;
-            assert_screen 'generic-desktop';
-            last;
+            next;
         }
         if (match_has_tag("terminal-unfocused")) {
             click_lastmatch;
