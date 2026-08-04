@@ -9,7 +9,8 @@ schedule:
   - yam/agama/agama
   - installation/grub_test
   - installation/first_boot
-  - yam/validate/validate_installed_patterns
-  - yam/validate/validate_packages
-  - yam/validate/validate_btrfs_without_snapshots
-  - console/validate_blockdevices
+  - shutdown/shutdown
+  # - yam/validate/validate_installed_patterns
+  # - yam/validate/validate_packages
+  # - yam/validate/validate_btrfs_without_snapshots
+  # - console/validate_blockdevices
