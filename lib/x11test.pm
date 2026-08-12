@@ -617,7 +617,7 @@ sub start_clean_firefox {
     send_key "esc";
 
     # restart firefox to trigger default browser pop-up and store .mozilla configuration as default without pop-ups
-    $self->restart_firefox('sync && cp -rp .mozilla .mozilla_first_run', 'opensuse.org');
+    $self->restart_firefox('sync && cp -rp .config/mozilla .mozilla_first_run', 'opensuse.org');
 }
 
 sub start_firefox_with_profile {
@@ -627,7 +627,7 @@ sub start_firefox_with_profile {
 
     x11_start_program(default_gui_terminal());
     # use mozilla configuration stored with start_clean_firefox
-    enter_cmd "killall -9 firefox;rm -rf .mozilla .config/iced* .cache/iced* .local/share/gnome-shell/extensions/*;cp -rp .mozilla_first_run .mozilla";
+    enter_cmd "killall -9 firefox;rm -rf .config/mozilla .config/iced* .cache/iced* .local/share/gnome-shell/extensions/*;cp -rp .mozilla_first_run .config/mozilla";
     # Start Firefox
     enter_cmd "firefox $url >firefox.log 2>&1 &";
     wait_still_screen 2, 4;
