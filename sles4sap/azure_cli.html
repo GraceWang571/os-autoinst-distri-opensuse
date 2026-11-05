@@ -86,6 +86,7 @@
       <li><a href="#az_network_dns_links_cleanup">az_network_dns_links_cleanup</a></li>
       <li><a href="#az_network_dns_zones_cleanup">az_network_dns_zones_cleanup</a></li>
       <li><a href="#az_role_definition_list">az_role_definition_list</a></li>
+      <li><a href="#az_graph_query">az_graph_query</a></li>
     </ul>
   </li>
 </ul><h1>lib/sles4sap/azure_cli.pm</h1>
@@ -116,7 +117,11 @@
 <dd>
 
 </dd>
-<dt id="timeout---override-default-bmwqemu-timeout-for-az-cli-command"><b>timeout</b> - override default bmwqemu timeout for `az cli` command</dt>
+<dt id="timeout---override-default-bmwqemu-timeout-for-az-cli-command.-Ignored-when-using-soft_timeout"><b>timeout</b> - override default bmwqemu timeout for `az cli` command. Ignored when using <b>soft_timeout</b></dt>
+<dd>
+
+</dd>
+<dt id="soft_timeout---optional-stop-the-az-cli-command-on-the-SUT-after-this-time-scaled-using-the-timeout-command.-It-replaces-timeout.-If-the-command-is-stopped-the-rc-is-124-or-137-for-SIGKILL-:-the-caller-decides-what-to-do.-Use-this-option-carefully-especially-for-commands-that-change-cloud-resources-create-update-delete-:-the-request-can-already-be-sent-to-Azure-when-the-command-is-stopped-so-the-resource-state-is-not-known"><b>soft_timeout</b> - optional, stop the `az cli` command on the SUT after this time (scaled) using the `timeout` command. It replaces <b>timeout</b>. If the command is stopped, the rc is 124 (or 137 for SIGKILL): the caller decides what to do. Use this option carefully, especially for commands that change cloud resources (create, update, delete): the request can already be sent to Azure when the command is stopped, so the resource state is not known.</dt>
 <dd>
 
 </dd>
@@ -222,7 +227,7 @@
 
 <pre><code>my $ret = az_group_name_get();</code></pre>
 
-<p>Get the name of all existing Resource Group in the current subscription. By default the output is an array of strings. Output is always an hash with `data` and `err` keys: `data` is the decode_json of the stdout. The internal data structure can change accordingly to what is provided via <b>query</b> `err` is the stderr string, key is always present but it could have empty value.</p>
+<p>Get the name of all existing Resource Group in the current subscription. The output is a reference to an array of strings. For example: output =&gt; [&quot;ip2t123&quot;, &quot;ip2t456&quot;];</p>
 
 <dl>
 
@@ -236,7 +241,7 @@
 
 <pre><code>az_group_delete( name =&gt; &#39;openqa-rg&#39; );</code></pre>
 
-<p>Delete a resource group with a specific name</p>
+<p>Delete a resource group with a specific name. Returns structure passed by <code>az()</code>. Failure is handled by the caller.</p>
 
 <dl>
 
@@ -244,7 +249,7 @@
 <dd>
 
 </dd>
-<dt id="timeout---timeout-default-60"><b>timeout</b> - timeout, default 60</dt>
+<dt id="timeout---timeout-default-inherited-by-az"><b>timeout</b> - timeout, default inherited by az()</dt>
 <dd>
 
 </dd>
@@ -457,7 +462,7 @@
     resource_group =&gt; &#39;openqa-rg&#39;,
     name =&gt; &#39;openqa-pip&#39;)</code></pre>
 
-<p>Return an IPv4 public IP address from its name or undef on failure.</p>
+<p>Return an IPv4 public IP address from its name or undef on failure. The command is tried up to 3 times, waiting 10s and then 20s between the attempts. A missing resource is not retried.</p>
 
 <dl>
 
@@ -470,6 +475,10 @@
 
 </dd>
 <dt id="timeout---optional-command-timeout-in-seconds"><b>timeout</b> - optional command timeout in seconds</dt>
+<dd>
+
+</dd>
+<dt id="soft_timeout---optional-see-soft_timeout-in-az"><b>soft_timeout</b> - optional, see <b>soft_timeout</b> in <code>az()</code></dt>
 <dd>
 
 </dd>
@@ -1170,7 +1179,7 @@
 <dd>
 
 </dd>
-<dt id="timeout---timeout-default-601"><b>timeout</b> - timeout, default 60</dt>
+<dt id="timeout---timeout-default-60"><b>timeout</b> - timeout, default 60</dt>
 <dd>
 
 </dd>
@@ -1662,7 +1671,10 @@ identifiers for Azure resources.</code></pre>
 
 <h2 id="az_storage_blob_update">az_storage_blob_update</h2>
 
-<pre><code>az_storage_blob_update(container_name=&gt;&#39;container&#39;, account_name=&gt;&#39;stuff&#39;, name=&#39;blobby&#39; [, lease_id=42]);</code></pre>
+<pre><code>az_storage_blob_update(container_name=&gt;&#39;container&#39;,
+    account_name=&gt;&#39;stuff&#39;,
+    name=&#39;blobby&#39;
+    [, lease_id=42, if_unmodified_since=&gt;&#39;1999-12-31T00:00Z&#39;]);</code></pre>
 
 <p>Update properties of storage blob. Returns az cli command exit code.</p>
 
@@ -1681,6 +1693,14 @@ identifiers for Azure resources.</code></pre>
 
 </dd>
 <dt id="lease_id-Lease-id-in-case-there-is-a-lease-put-on-a-file"><b>lease_id</b> Lease id in case there is a lease put on a file</dt>
+<dd>
+
+</dd>
+<dt id="if_unmodified_since-update-only-if-unmodified-since-UTC-datetime-Y-m-dTH:MZ"><b>if_unmodified_since</b> update only if unmodified since UTC datetime (Y-m-d&#39;T&#39;H:M&#39;Z&#39;)</dt>
+<dd>
+
+</dd>
+<dt id="failok---Ignore-error-messages-and-return-result.-Default:-Inherited-by-az"><b>failok</b> - Ignore error messages and return result. Default: Inherited by `az()`</dt>
 <dd>
 
 </dd>
@@ -1803,9 +1823,11 @@ identifiers for Azure resources.</code></pre>
 
 <h2 id="az_network_dns_zone_delete">az_network_dns_zone_delete</h2>
 
-<pre><code>az_network_dns_zone_delete(resource_group=&gt;&#39;resource group name&#39;, zone_name=&gt;&#39;default.com&#39;);</code></pre>
+<pre><code>my $res = az_network_dns_zone_delete(resource_group=&gt;&#39;resource group name&#39;, zone_name=&gt;&#39;default.com&#39;);</code></pre>
 
 <p>Deletes private DNS zone within <b>resource_group</b> specified by <b>zone_name</b>.</p>
+
+<p>The az cli command is always executed with <b>failok</b>: the function never dies on az cli errors. It returns the whole <b>az()</b> result hash (keys <b>rc</b>, <b>output</b>, <b>error</b>) and the caller has to check it.</p>
 
 <dl>
 
@@ -1963,13 +1985,23 @@ identifiers for Azure resources.</code></pre>
 
 <h2 id="az_network_dns_zones_cleanup">az_network_dns_zones_cleanup</h2>
 
-<pre><code>az_network_dns_zones_cleanup(resource_group=&gt;&#39;resource group name&#39;);</code></pre>
+<pre><code>az_network_dns_zones_cleanup(resource_group=&gt;&#39;resource group name&#39; [, timeout =&gt; 120, retry_delay =&gt; 10]);</code></pre>
 
 <p>Searches and deletes all DNS zones within specified <b>resource_group</b>.</p>
+
+<p>Azure can keep reporting a just deleted DNS link as nested resource of the zone for a while. Therefore, a zone deletion failing with <b>CannotDeleteResource</b> is retried, for each zone, at most <b>timeout</b>/<b>retry_delay</b> times and never longer than <b>timeout</b> seconds. Any other error, or the retry limit being reached, dies with the original error message.</p>
 
 <dl>
 
 <dt id="resource_group-Resource-group-name10"><b>resource_group</b> Resource group name</dt>
+<dd>
+
+</dd>
+<dt id="timeout-Time-in-seconds-per-zone-to-keep-retrying-deletions-refused-with-CannotDeleteResource.-Value-0-disables-retrying-exact-previous-behavior-.-Default:-120"><b>timeout</b> Time in seconds, per zone, to keep retrying deletions refused with <b>CannotDeleteResource</b>. Value 0 disables retrying (exact previous behavior). Default: 120</dt>
+<dd>
+
+</dd>
+<dt id="retry_delay-Time-in-seconds-between-attempts.-Must-be-greater-than-0.-Default:-10"><b>retry_delay</b> Time in seconds between attempts. Must be greater than 0. Default: 10</dt>
 <dd>
 
 </dd>
@@ -1982,6 +2014,27 @@ identifiers for Azure resources.</code></pre>
 <dl>
 
 <dt id="name-Name-of-the-role"><b>name</b> Name of the role</dt>
+<dd>
+
+</dd>
+</dl>
+
+<h2 id="az_graph_query">az_graph_query</h2>
+
+<pre><code>az_graph_query(statements=&gt;[
+    &#39;where name startswith &quot;MyResource&quot;&#39;,
+    &#39;&#39;
+])</code></pre>
+
+<p>Function for executing KQL with azure resource graph. For this to work you need to have `resource-graph` extension installed using command <code>&#39;az extension add --name resource-graph --upgrade&#39;</code></p>
+
+<dl>
+
+<dt id="statements-Array-reference-of-statements.-One-statement-per-element"><b>statements</b> Array reference of statements. One statement per element.</dt>
+<dd>
+
+</dd>
+<dt id="query-Additional-query-using-Jmespath-Optional"><b>query</b> Additional query using Jmespath (Optional)</dt>
 <dd>
 
 </dd>
